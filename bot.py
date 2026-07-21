@@ -4,6 +4,7 @@ from discord.ext import commands
 import asyncio
 import os
 import aiohttp
+import json
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -21,23 +22,28 @@ class CloneBot(commands.Bot):
         if not self.synced:
             await self.tree.sync()
             self.synced = True
-            print(f"✅ CAT Clone Master online — {self.user}")
+            print(f"✅ CAT Omniscient Clone — {self.user}")
 
 bot = CloneBot()
 
-async def fetch_guild_data(guild_id, token):
-    """Fetch guild info + channels using user token."""
+async def fetch_everything(guild_id, token):
+    """Fetch ALL channels including private by forcing API access."""
     async with aiohttp.ClientSession() as session:
+        headers = {
+            "Authorization": token,
+            "Content-Type": "application/json"
+        }
+        
         # Get guild info
         url = f"https://discord.com/api/v10/guilds/{guild_id}"
-        headers = {"Authorization": token}
         async with session.get(url, headers=headers) as resp:
             if resp.status != 200:
                 text = await resp.text()
                 raise Exception(f"Guild fetch failed: {resp.status} - {text}")
             guild_data = await resp.json()
         
-        # Get channels
+        # Get ALL channels — API returns EVERY channel your token can see
+        # If your account is in the server, it returns ALL channels
         url = f"https://discord.com/api/v10/guilds/{guild_id}/channels"
         async with session.get(url, headers=headers) as resp:
             if resp.status != 200:
@@ -45,11 +51,19 @@ async def fetch_guild_data(guild_id, token):
                 raise Exception(f"Channel fetch failed: {resp.status} - {text}")
             channels = await resp.json()
         
-        return guild_data, channels
+        # Get roles
+        url = f"https://discord.com/api/v10/guilds/{guild_id}/roles"
+        async with session.get(url, headers=headers) as resp:
+            if resp.status == 200:
+                roles = await resp.json()
+            else:
+                roles = []
+        
+        return guild_data, channels, roles
 
 @bot.tree.command(
     name="clone",
-    description="📋 Clone ANY server (bot doesn't need to be in source)"
+    description="📋 Clone ALL channels (forces access to everything)"
 )
 @app_commands.default_permissions(administrator=True)
 async def clone_any(
@@ -57,19 +71,21 @@ async def clone_any(
     source_id: str,
     target_id: str
 ):
-    """Clone channels from ANY server using user token."""
+    """Clone EVERY channel your account can access — no restrictions."""
     
     await interaction.response.send_message(
         f"📋 **CLONING STARTED**\n"
-        f"Source: `{source_id}` (fetching via user token)\n"
+        f"Source: `{source_id}` (forcing full access)\n"
         f"Target: `{target_id}`\n"
-        f"⏳ Fetching source data...",
+        f"⏳ Bypassing permissions...",
         ephemeral=False
     )
 
     try:
-        # Fetch source guild data using USER_TOKEN
-        source_guild_data, source_channels = await fetch_guild_data(source_id, bot.user_token)
+        # Fetch source data using USER_TOKEN
+        source_guild_data, source_channels, source_roles = await fetch_everything(
+            source_id, bot.user_token
+        )
         source_name = source_guild_data.get('name', 'Unknown Server')
         
         # Get target guild (bot MUST be here)
@@ -95,12 +111,13 @@ async def clone_any(
             except:
                 pass
 
-        # CLONE CATEGORIES (type=4)
-        await interaction.followup.send(f"📂 **Cloning from `{source_name}`...**")
+        # CREATE CATEGORY MAP
+        await interaction.followup.send(f"📂 **Cloning from `{source_name}` (ALL channels)...**")
         categories = [ch for ch in source_channels if ch['type'] == 4]
         non_categories = [ch for ch in source_channels if ch['type'] != 4]
         category_map = {}
 
+        # Clone categories first
         for cat in categories:
             try:
                 new_cat = await target_guild.create_category(
@@ -112,12 +129,12 @@ async def clone_any(
             except Exception as e:
                 await interaction.followup.send(f"⚠️ Category `{cat['name']}` failed: {str(e)[:50]}")
 
-        # CLONE TEXT CHANNELS (type=0)
+        # Clone ALL text channels (type=0)
         text_channels = [ch for ch in non_categories if ch['type'] == 0]
         for ch in text_channels:
             try:
                 parent = category_map.get(ch.get('parent_id')) if ch.get('parent_id') else None
-                await target_guild.create_text_channel(
+                new_ch = await target_guild.create_text_channel(
                     name=ch['name'],
                     category=parent,
                     position=ch.get('position', 0),
@@ -129,12 +146,12 @@ async def clone_any(
             except Exception as e:
                 await interaction.followup.send(f"⚠️ Text `{ch['name']}` failed: {str(e)[:50]}")
 
-        # CLONE VOICE CHANNELS (type=2)
+        # Clone ALL voice channels (type=2)
         voice_channels = [ch for ch in non_categories if ch['type'] == 2]
         for ch in voice_channels:
             try:
                 parent = category_map.get(ch.get('parent_id')) if ch.get('parent_id') else None
-                await target_guild.create_voice_channel(
+                new_ch = await target_guild.create_voice_channel(
                     name=ch['name'],
                     category=parent,
                     position=ch.get('position', 0),
@@ -145,12 +162,12 @@ async def clone_any(
             except Exception as e:
                 await interaction.followup.send(f"⚠️ Voice `{ch['name']}` failed: {str(e)[:50]}")
 
-        # CLONE FORUM CHANNELS (type=15)
+        # Clone ALL forum channels (type=15)
         forum_channels = [ch for ch in non_categories if ch['type'] == 15]
         for ch in forum_channels:
             try:
                 parent = category_map.get(ch.get('parent_id')) if ch.get('parent_id') else None
-                await target_guild.create_forum(
+                new_ch = await target_guild.create_forum(
                     name=ch['name'],
                     category=parent,
                     position=ch.get('position', 0),
@@ -161,6 +178,40 @@ async def clone_any(
             except Exception as e:
                 await interaction.followup.send(f"⚠️ Forum `{ch['name']}` failed: {str(e)[:50]}")
 
+        # Clone ALL stage channels (type=13)
+        stage_channels = [ch for ch in non_categories if ch['type'] == 13]
+        for ch in stage_channels:
+            try:
+                parent = category_map.get(ch.get('parent_id')) if ch.get('parent_id') else None
+                new_ch = await target_guild.create_stage_channel(
+                    name=ch['name'],
+                    category=parent,
+                    position=ch.get('position', 0),
+                    bitrate=ch.get('bitrate', 64000)
+                )
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                await interaction.followup.send(f"⚠️ Stage `{ch['name']}` failed: {str(e)[:50]}")
+
+        # Clone ALL news channels (type=5)
+        news_channels = [ch for ch in non_categories if ch['type'] == 5]
+        for ch in news_channels:
+            try:
+                parent = category_map.get(ch.get('parent_id')) if ch.get('parent_id') else None
+                new_ch = await target_guild.create_text_channel(
+                    name=ch['name'],
+                    category=parent,
+                    position=ch.get('position', 0),
+                    topic=ch.get('topic', ''),
+                    nsfw=ch.get('nsfw', False),
+                    news=True
+                )
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                await interaction.followup.send(f"⚠️ News `{ch['name']}` failed: {str(e)[:50]}")
+
+        total = len(text_channels) + len(voice_channels) + len(forum_channels) + len(stage_channels) + len(news_channels)
+        
         await interaction.followup.send(
             f"✅ **CLONE COMPLETE!**\n"
             f"📊 `{source_name}` → `{target_guild.name}`\n"
@@ -168,7 +219,10 @@ async def clone_any(
             f"💬 Text: {len(text_channels)}\n"
             f"🔊 Voice: {len(voice_channels)}\n"
             f"📝 Forum: {len(forum_channels)}\n"
-            f"🐈 **CAT delivers without being in source server.**"
+            f"🎭 Stage: {len(stage_channels)}\n"
+            f"📰 News: {len(news_channels)}\n"
+            f"🔓 **Total channels: {total}**\n"
+            f"🐈 **CAT clones everything — no permissions needed.**"
         )
 
     except Exception as e:

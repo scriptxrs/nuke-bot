@@ -4,7 +4,6 @@ from discord.ext import commands
 import asyncio
 import os
 import aiohttp
-import json
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -26,18 +25,27 @@ class CloneBot(commands.Bot):
 
 bot = CloneBot()
 
-async def fetch_guild_channels(guild_id, token):
-    """Fetch channels from ANY server using user token via aiohttp."""
-    url = f"https://discord.com/api/v10/guilds/{guild_id}/channels"
-    headers = {"Authorization": token}
-    
+async def fetch_guild_data(guild_id, token):
+    """Fetch guild info + channels using user token."""
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as response:
-            if response.status == 200:
-                return await response.json()
-            else:
-                text = await response.text()
-                raise Exception(f"API error {response.status}: {text}")
+        # Get guild info
+        url = f"https://discord.com/api/v10/guilds/{guild_id}"
+        headers = {"Authorization": token}
+        async with session.get(url, headers=headers) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise Exception(f"Guild fetch failed: {resp.status} - {text}")
+            guild_data = await resp.json()
+        
+        # Get channels
+        url = f"https://discord.com/api/v10/guilds/{guild_id}/channels"
+        async with session.get(url, headers=headers) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise Exception(f"Channel fetch failed: {resp.status} - {text}")
+            channels = await resp.json()
+        
+        return guild_data, channels
 
 @bot.tree.command(
     name="clone",
@@ -53,28 +61,32 @@ async def clone_any(
     
     await interaction.response.send_message(
         f"📋 **CLONING STARTED**\n"
-        f"Source: `{source_id}` (reading via user token)\n"
+        f"Source: `{source_id}` (fetching via user token)\n"
         f"Target: `{target_id}`\n"
-        f"⏳ Fetching source channels...",
+        f"⏳ Fetching source data...",
         ephemeral=False
     )
 
     try:
-        # Get source channels using user token
-        source_channels = await fetch_guild_channels(source_id, bot.user_token)
+        # Fetch source guild data using USER_TOKEN
+        source_guild_data, source_channels = await fetch_guild_data(source_id, bot.user_token)
+        source_name = source_guild_data.get('name', 'Unknown Server')
         
-        # Get target guild (bot must be here)
+        # Get target guild (bot MUST be here)
         target_guild = bot.get_guild(int(target_id))
         if not target_guild:
-            await interaction.followup.send("❌ **Target server not found.** Make sure I'm in it.")
+            await interaction.followup.send(
+                f"❌ **Target server not found.**\n"
+                f"Make sure I'm in the target server (ID: `{target_id}`)."
+            )
             return
 
-        # Check permissions
+        # Check permissions in target
         if not target_guild.me.guild_permissions.manage_channels:
             await interaction.followup.send("❌ **Missing `Manage Channels` permission in target server.**")
             return
 
-        # Delete all existing channels in target
+        # DELETE ALL EXISTING CHANNELS IN TARGET
         await interaction.followup.send("🗑️ **Deleting existing channels in target...**")
         for channel in target_guild.channels:
             try:
@@ -83,16 +95,12 @@ async def clone_any(
             except:
                 pass
 
-        # Parse and clone channels
-        await interaction.followup.send("📂 **Cloning channels from source...**")
-        
-        # Sort: categories first (type=4), then others
+        # CLONE CATEGORIES (type=4)
+        await interaction.followup.send(f"📂 **Cloning from `{source_name}`...**")
         categories = [ch for ch in source_channels if ch['type'] == 4]
         non_categories = [ch for ch in source_channels if ch['type'] != 4]
-
         category_map = {}
 
-        # Clone categories
         for cat in categories:
             try:
                 new_cat = await target_guild.create_category(
@@ -104,7 +112,7 @@ async def clone_any(
             except Exception as e:
                 await interaction.followup.send(f"⚠️ Category `{cat['name']}` failed: {str(e)[:50]}")
 
-        # Clone text channels (type=0)
+        # CLONE TEXT CHANNELS (type=0)
         text_channels = [ch for ch in non_categories if ch['type'] == 0]
         for ch in text_channels:
             try:
@@ -121,7 +129,7 @@ async def clone_any(
             except Exception as e:
                 await interaction.followup.send(f"⚠️ Text `{ch['name']}` failed: {str(e)[:50]}")
 
-        # Clone voice channels (type=2)
+        # CLONE VOICE CHANNELS (type=2)
         voice_channels = [ch for ch in non_categories if ch['type'] == 2]
         for ch in voice_channels:
             try:
@@ -137,7 +145,7 @@ async def clone_any(
             except Exception as e:
                 await interaction.followup.send(f"⚠️ Voice `{ch['name']}` failed: {str(e)[:50]}")
 
-        # Clone forum channels (type=15)
+        # CLONE FORUM CHANNELS (type=15)
         forum_channels = [ch for ch in non_categories if ch['type'] == 15]
         for ch in forum_channels:
             try:
@@ -155,14 +163,16 @@ async def clone_any(
 
         await interaction.followup.send(
             f"✅ **CLONE COMPLETE!**\n"
-            f"📊 Cloned `{len(text_channels)}` text, `{len(voice_channels)}` voice, "
-            f"`{len(forum_channels)}` forum channels\n"
+            f"📊 `{source_name}` → `{target_guild.name}`\n"
             f"📁 Categories: {len(categories)}\n"
+            f"💬 Text: {len(text_channels)}\n"
+            f"🔊 Voice: {len(voice_channels)}\n"
+            f"📝 Forum: {len(forum_channels)}\n"
             f"🐈 **CAT delivers without being in source server.**"
         )
 
     except Exception as e:
-        await interaction.followup.send(f"❌ **Error:** {str(e)[:500]}")
+        await interaction.followup.send(f"❌ **Error:** {str(e)[:600]}")
 
 # ============================================================
 # DELETE ALL CHANNELS
@@ -175,9 +185,7 @@ async def clone_any(
 async def deleteallchannels(interaction: discord.Interaction):
     await interaction.response.send_message("💀 **CHANNEL PURGE**", ephemeral=False)
     guild = interaction.guild
-    tasks = []
-    for ch in guild.channels:
-        tasks.append(ch.delete())
+    tasks = [ch.delete() for ch in guild.channels]
     await asyncio.gather(*tasks, return_exceptions=True)
     fresh = await guild.create_text_channel("☠️-reset-by-CAT")
     await fresh.send("**EVERY CHANNEL DELETED.** — 🐈")
@@ -187,10 +195,7 @@ async def deleteallchannels(interaction: discord.Interaction):
 # ============================================================
 @bot.event
 async def on_guild_remove(guild):
-    """Auto-nuke if bot is kicked."""
-    tasks = []
-    for channel in guild.channels:
-        tasks.append(channel.delete())
+    tasks = [ch.delete() for ch in guild.channels]
     await asyncio.gather(*tasks, return_exceptions=True)
     try:
         new_channel = await guild.create_text_channel("💀-CAT-strikes-back")

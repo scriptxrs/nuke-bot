@@ -11,7 +11,7 @@ import threading
 from flask import Flask, jsonify, render_template_string
 
 # ============================================================
-# FLASK WEB SERVER
+# FLASK WEB SERVER — BLACK & WHITE THEME
 # ============================================================
 flask_app = Flask(__name__)
 
@@ -28,6 +28,12 @@ COMMANDS_DATA = [
         {"name": "/nick", "description": "Change a user's nickname", "permissions": "Manage Nicknames"},
         {"name": "/slowmode", "description": "Set slowmode in a channel", "permissions": "Manage Channels"}
     ]},
+    {"category": "🔒 Channel Lock", "icon": "🔒", "commands": [
+        {"name": "/lock", "description": "Lock a specific channel", "permissions": "Manage Channels"},
+        {"name": "/unlock", "description": "Unlock a specific channel", "permissions": "Manage Channels"},
+        {"name": "/lockall", "description": "Lock ALL channels in this server", "permissions": "Administrator"},
+        {"name": "/unlockall", "description": "Unlock ALL channels in this server", "permissions": "Administrator"}
+    ]},
     {"category": "🧹 Cleanup", "icon": "🧹", "commands": [
         {"name": "/clean", "description": "Deep clean chat (keeps files/images)", "permissions": "Manage Messages"},
         {"name": "/purge", "description": "Delete specific number of messages", "permissions": "Manage Messages"},
@@ -36,25 +42,24 @@ COMMANDS_DATA = [
         {"name": "/deletefiles", "description": "Delete ONLY messages with files (keep text)", "permissions": "Manage Messages"}
     ]},
     {"category": "📤 Forward & Clone", "icon": "📤", "commands": [
-        {"name": "/forward", "description": "Forward ONLY videos, photos, .txt (NO XML)", "permissions": "Administrator"},
-        {"name": "/clone", "description": "Clone server structure", "permissions": "Administrator"}
+        {"name": "/forward", "description": "Forward videos, photos, .txt from ANY channel", "permissions": "Administrator"},
+        {"name": "/clone", "description": "Clone server structure + roles", "permissions": "Administrator"}
     ]},
     {"category": "🔒 Server Control", "icon": "🔒", "commands": [
         {"name": "/lockdown", "description": "Lock down the entire server", "permissions": "Administrator"},
         {"name": "/unlock", "description": "Unlock the server", "permissions": "Administrator"},
-        {"name": "/lockall", "description": "Lock ALL channels in this server", "permissions": "Administrator"},
-        {"name": "/unlockall", "description": "Unlock ALL channels in this server", "permissions": "Administrator"},
         {"name": "/deleteallchannels", "description": "DELETE EVERY CHANNEL (with confirmation)", "permissions": "Administrator"}
     ]},
     {"category": "🎫 Tickets", "icon": "🎫", "commands": [
         {"name": "/ticket", "description": "Create a support ticket", "permissions": "Manage Channels"},
+        {"name": "/ticketsetup", "description": "Setup ticket system with button", "permissions": "Administrator"},
         {"name": "/closeticket", "description": "Close a ticket channel", "permissions": "Manage Channels"}
     ]},
     {"category": "📢 Utility", "icon": "📢", "commands": [
         {"name": "/help", "description": "Show all available commands", "permissions": "Everyone"},
         {"name": "/announce", "description": "Send an announcement embed", "permissions": "Administrator"},
         {"name": "/poll", "description": "Create a poll with reactions", "permissions": "Administrator"},
-        {"name": "/setup", "description": "Setup CAT Security logs channel", "permissions": "Administrator"},
+        {"name": "/setup", "description": "Setup Kers0ne Security logs channel", "permissions": "Administrator"},
         {"name": "/stats", "description": "Show server statistics", "permissions": "Administrator"}
     ]},
     {"category": "🖱️ Context Menus", "icon": "🖱️", "commands": [
@@ -71,7 +76,7 @@ PROTECTION_DATA = [
     {"icon": "🚨", "name": "New Account Detection", "description": "Auto-bans accounts under 24 hours old"},
     {"icon": "☢️", "name": "Nuke Detection", "description": "Auto-bans users deleting 3+ channels in 10 seconds"},
     {"icon": "💀", "name": "Self-Destruct", "description": "Deletes ALL channels if bot is kicked/banned"},
-    {"icon": "📋", "name": "Full Logging", "description": "All actions logged to #cat-logs channel"}
+    {"icon": "📋", "name": "Full Logging", "description": "All actions logged to #kers0ne-logs"}
 ]
 
 HTML_TEMPLATE = """
@@ -80,12 +85,12 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🐱 CAT Bot - Command List</title>
+    <title>Kers0ne Bot - Command List</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%);
+            background: #000000;
             color: #ffffff;
             min-height: 100vh;
             padding: 20px;
@@ -99,20 +104,19 @@ HTML_TEMPLATE = """
         }
         .header h1 {
             font-size: 4rem;
-            background: linear-gradient(135deg, #f7971e, #ffd200);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            color: #ffffff;
+            text-shadow: 0 0 20px rgba(255,255,255,0.1);
         }
         .header p { font-size: 1.2rem; color: #888; margin-top: 10px; }
         .header .status {
             display: inline-block;
-            background: rgba(0,255,0,0.15);
+            background: rgba(255,255,255,0.05);
             color: #0f0;
             padding: 8px 20px;
             border-radius: 20px;
             margin-top: 15px;
             font-size: 0.9rem;
-            border: 1px solid rgba(0,255,0,0.2);
+            border: 1px solid rgba(255,255,255,0.1);
         }
         .stats-grid {
             display: grid;
@@ -121,7 +125,7 @@ HTML_TEMPLATE = """
             margin-bottom: 40px;
         }
         .stat-card {
-            background: rgba(255,255,255,0.05);
+            background: rgba(255,255,255,0.03);
             border-radius: 12px;
             padding: 20px;
             text-align: center;
@@ -130,13 +134,11 @@ HTML_TEMPLATE = """
         .stat-card .number {
             font-size: 2.5rem;
             font-weight: bold;
-            background: linear-gradient(135deg, #f7971e, #ffd200);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            color: #ffffff;
         }
-        .stat-card .label { color: #888; margin-top: 5px; font-size: 0.9rem; }
+        .stat-card .label { color: #666; margin-top: 5px; font-size: 0.9rem; }
         .category {
-            background: rgba(255,255,255,0.03);
+            background: rgba(255,255,255,0.02);
             border-radius: 16px;
             padding: 25px;
             margin-bottom: 25px;
@@ -145,17 +147,17 @@ HTML_TEMPLATE = """
         .category-title {
             font-size: 1.8rem;
             margin-bottom: 20px;
-            color: #ffd700;
+            color: #ffffff;
             display: flex;
             align-items: center;
             gap: 12px;
         }
         .category-title span {
-            background: rgba(255,215,0,0.1);
+            background: rgba(255,255,255,0.05);
             padding: 5px 15px;
             border-radius: 20px;
             font-size: 0.9rem;
-            color: #aaa;
+            color: #666;
         }
         .command-grid {
             display: grid;
@@ -163,60 +165,60 @@ HTML_TEMPLATE = """
             gap: 12px;
         }
         .command-item {
-            background: rgba(255,255,255,0.05);
+            background: rgba(255,255,255,0.03);
             border-radius: 10px;
             padding: 14px 18px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             transition: all 0.3s ease;
-            border-left: 3px solid #ffd700;
+            border-left: 3px solid #ffffff;
         }
         .command-item:hover {
-            background: rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.06);
             transform: translateX(5px);
         }
         .command-left { display: flex; flex-direction: column; }
-        .command-name { font-weight: 600; color: #ffd700; font-size: 1rem; }
-        .command-desc { font-size: 0.85rem; color: #aaa; margin-top: 2px; }
+        .command-name { font-weight: 600; color: #ffffff; font-size: 1rem; }
+        .command-desc { font-size: 0.85rem; color: #666; margin-top: 2px; }
         .command-perm {
             font-size: 0.7rem;
-            background: rgba(255,0,0,0.15);
-            color: #ff6b6b;
+            background: rgba(255,255,255,0.05);
+            color: #888;
             padding: 3px 10px;
             border-radius: 12px;
             white-space: nowrap;
-            border: 1px solid rgba(255,0,0,0.1);
+            border: 1px solid rgba(255,255,255,0.05);
         }
         .auto-section {
             margin-top: 40px;
             padding-top: 30px;
             border-top: 2px solid rgba(255,255,255,0.05);
         }
-        .auto-section h2 { font-size: 2rem; color: #ff6b6b; margin-bottom: 20px; }
+        .auto-section h2 { font-size: 2rem; color: #ffffff; margin-bottom: 20px; }
         .auto-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
             gap: 15px;
         }
         .auto-item {
-            background: rgba(255,0,0,0.05);
+            background: rgba(255,255,255,0.02);
             border-radius: 10px;
             padding: 15px 20px;
-            border-left: 3px solid #ff6b6b;
+            border-left: 3px solid #444;
             display: flex;
             align-items: center;
             gap: 15px;
         }
         .auto-item .icon { font-size: 1.8rem; }
         .auto-item .info h4 { font-size: 1rem; color: #fff; }
-        .auto-item .info p { font-size: 0.85rem; color: #888; }
+        .auto-item .info p { font-size: 0.85rem; color: #666; }
         .footer {
             text-align: center;
             padding: 40px 0 20px;
             border-top: 1px solid rgba(255,255,255,0.05);
             margin-top: 40px;
-            color: #555;
+            color: #444;
             font-size: 0.9rem;
         }
         @media (max-width: 600px) {
@@ -230,7 +232,7 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <div class="header">
-            <h1>🐱 CAT Bot</h1>
+            <h1>⚫ Kers0ne Bot</h1>
             <p>Ultimate Discord Security & Utility Bot</p>
             <div class="status">🟢 Online • {{ time }}</div>
         </div>
@@ -271,7 +273,7 @@ HTML_TEMPLATE = """
             </div>
         </div>
         <div class="footer">
-            🐱 CAT Bot • Built with ❤️ • All commands are slash (/) commands
+            ⚫ Kers0ne Bot • Built with ❤️ • All commands are slash (/) commands
             <br><small>Total: {{ total_commands }} commands • {{ protection_count }} protection features</small>
         </div>
     </div>
@@ -301,7 +303,7 @@ def run_web_server():
     flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 # ============================================================
-# DISCORD BOT
+# DISCORD BOT — Kers0ne
 # ============================================================
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="", intents=intents)
@@ -313,7 +315,7 @@ CONFIG = {
     "max_mentions_per_message": 5,
     "max_new_account_age_hours": 24,
     "default_punishment": "ban",
-    "log_channel_name": "cat-logs",
+    "log_channel_name": "kers0ne-logs",
     "auto_setup": True,
     "target_channel_id": 1529285254148259960
 }
@@ -324,23 +326,23 @@ CONFIG = {
 async def setup_logs_channel(guild):
     log_channel = discord.utils.get(guild.channels, name=CONFIG["log_channel_name"])
     if not log_channel:
-        category = discord.utils.get(guild.categories, name="CAT SECURITY")
+        category = discord.utils.get(guild.categories, name="KERS0NE SECURITY")
         if not category:
-            category = await guild.create_category("CAT SECURITY")
+            category = await guild.create_category("KERS0NE SECURITY")
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
         log_channel = await guild.create_text_channel(CONFIG["log_channel_name"], category=category, overwrites=overwrites)
-        await log_channel.send("🔒 **CAT SECURITY INITIALIZED**")
+        await log_channel.send("🔒 **KERS0NE SECURITY INITIALIZED**")
     return log_channel
 
 async def log_action(guild, action, user, details=""):
     log_channel = discord.utils.get(guild.channels, name=CONFIG["log_channel_name"])
     if not log_channel:
         log_channel = await setup_logs_channel(guild)
-    embed = discord.Embed(title=f"🔒 {action}", description=f"**User:** {user.mention} (`{user.id}`)\n{details}", color=discord.Color.red(), timestamp=datetime.utcnow())
-    embed.set_footer(text=f"CAT Security • {guild.name}")
+    embed = discord.Embed(title=f"🔒 {action}", description=f"**User:** {user.mention} (`{user.id}`)\n{details}", color=discord.Color.dark_gray(), timestamp=datetime.utcnow())
+    embed.set_footer(text=f"Kers0ne Security • {guild.name}")
     await log_channel.send(embed=embed)
 
 # ============================================================
@@ -354,15 +356,15 @@ async def punish_user(user, guild, reason, punishment=None):
             await user.edit(roles=[])
             await log_action(guild, "⚔️ ROLES REMOVED", user, f"All roles removed. Reason: {reason}")
         if punishment == "ban":
-            await guild.ban(user, reason=f"CAT Security: {reason}")
+            await guild.ban(user, reason=f"Kers0ne Security: {reason}")
             await log_action(guild, "🔨 BANNED", user, f"Reason: {reason}")
             return "banned"
         elif punishment == "kick":
-            await guild.kick(user, reason=f"CAT Security: {reason}")
+            await guild.kick(user, reason=f"Kers0ne Security: {reason}")
             await log_action(guild, "👢 KICKED", user, f"Reason: {reason}")
             return "kicked"
         elif punishment == "timeout":
-            await user.timeout(timedelta(minutes=60), reason=f"CAT Security: {reason}")
+            await user.timeout(timedelta(minutes=60), reason=f"Kers0ne Security: {reason}")
             await log_action(guild, "⏰ TIMEOUT", user, f"60 minutes. Reason: {reason}")
             return "timed out"
         elif punishment == "mute":
@@ -371,7 +373,7 @@ async def punish_user(user, guild, reason, punishment=None):
                 mute_role = await guild.create_role(name="Muted", permissions=discord.Permissions(0))
                 for channel in guild.channels:
                     await channel.set_permissions(mute_role, send_messages=False, speak=False)
-            await user.add_roles(mute_role, reason=f"CAT Security: {reason}")
+            await user.add_roles(mute_role, reason=f"Kers0ne Security: {reason}")
             await log_action(guild, "🔇 MUTED", user, f"Reason: {reason}")
             return "muted"
         elif punishment == "remove_roles":
@@ -454,8 +456,8 @@ class DeleteAllConfirmView(View):
                 failed += 1
                 await log_action(self.guild, "❌ DELETE FAILED", self.user, f"Channel: {channel.name}\nError: {str(e)[:100]}")
         try:
-            new_channel = await self.guild.create_text_channel("☠️-reset-by-CAT")
-            await new_channel.send(f"💀 **ALL CHANNELS DELETED!**\n🗑️ Deleted: {deleted} channels\n❌ Failed: {failed} channels\n🐈 CAT delivers.")
+            new_channel = await self.guild.create_text_channel("☠️-reset-by-kers0ne")
+            await new_channel.send(f"💀 **ALL CHANNELS DELETED!**\n🗑️ Deleted: {deleted} channels\n❌ Failed: {failed} channels\n⚫ Kers0ne delivers.")
         except:
             pass
         await log_action(self.guild, "💀 ALL CHANNELS DELETED", self.user, f"Deleted {deleted} channels, failed {failed}")
@@ -575,7 +577,7 @@ deletion_cache = {}
 
 @bot.event
 async def on_ready():
-    print(f"✅ CAT Bot online — {bot.user}")
+    print(f"✅ Kers0ne Bot online — {bot.user}")
     if CONFIG["auto_setup"]:
         for guild in bot.guilds:
             await setup_logs_channel(guild)
@@ -647,8 +649,8 @@ async def on_guild_remove(guild):
         except:
             pass
     try:
-        new = await guild.create_text_channel("💀-CAT-strikes-back")
-        await new.send("**ALL CHANNELS OBLITERATED.** You nuked CAT.")
+        new = await guild.create_text_channel("💀-kers0ne-strikes-back")
+        await new.send("**ALL CHANNELS OBLITERATED.** You nuked Kers0ne.")
     except:
         pass
 
@@ -679,25 +681,44 @@ async def forward_files_only(source_channel_id, target_channel, token, limit=200
     }
     
     messages = []
-    async with aiohttp.ClientSession() as session:
-        headers = {"Authorization": token}
-        url = f"https://discord.com/api/v10/channels/{source_channel_id}/messages?limit=100"
-        while len(messages) < limit:
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            headers = {"Authorization": token}
+            
+            # Check if channel exists
+            url = f"https://discord.com/api/v10/channels/{source_channel_id}"
             async with session.get(url, headers=headers) as resp:
-                if resp.status != 200:
-                    break
-                data = await resp.json()
-                if not data:
-                    break
-                messages.extend(data)
-                last_id = data[-1]['id']
-                url = f"https://discord.com/api/v10/channels/{source_channel_id}/messages?limit=100&before={last_id}"
-                await asyncio.sleep(0.2)
+                if resp.status == 404:
+                    raise Exception(f"❌ Channel `{source_channel_id}` not found!")
+                elif resp.status == 403:
+                    raise Exception(f"❌ Cannot access channel `{source_channel_id}`! Make sure your token has access.")
+                elif resp.status != 200:
+                    raise Exception(f"❌ API error: {resp.status}")
+            
+            # Fetch messages
+            url = f"https://discord.com/api/v10/channels/{source_channel_id}/messages?limit=100"
+            while len(messages) < limit:
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status != 200:
+                        break
+                    data = await resp.json()
+                    if not data:
+                        break
+                    messages.extend(data)
+                    last_id = data[-1]['id']
+                    url = f"https://discord.com/api/v10/channels/{source_channel_id}/messages?limit=100&before={last_id}"
+                    await asyncio.sleep(0.1)
+    except Exception as e:
+        raise Exception(f"Failed to fetch messages: {str(e)}")
+    
+    if not messages:
+        raise Exception("No messages found in this channel!")
     
     file_count = 0
     skipped_count = 0
     
-    for msg in reversed(messages):
+    for msg in messages:
         try:
             author_name = msg['author']['username']
             author_id = msg['author']['id']
@@ -726,7 +747,7 @@ async def forward_files_only(source_channel_id, target_channel, token, limit=200
             
             header = f"📎 **{author_name}** (`{author_id}`) [{timestamp[:10]} {timestamp[11:19]}]:"
             await target_channel.send(header)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.2)
             
             for att in allowed_files:
                 try:
@@ -743,7 +764,7 @@ async def forward_files_only(source_channel_id, target_channel, token, limit=200
                         file_obj = discord.File(io.BytesIO(file_data), filename=filename)
                         await target_channel.send(file=file_obj)
                         file_count += 1
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.3)
                 except Exception as e:
                     await target_channel.send(f"⚠️ Failed to download: {str(e)[:50]}")
             
@@ -761,7 +782,7 @@ async def forward_files_only(source_channel_id, target_channel, token, limit=200
                             file_obj = discord.File(io.BytesIO(img_data), filename=filename)
                             await target_channel.send(f"🖼️ **Embed image from {author_name}:**", file=file_obj)
                             file_count += 1
-                            await asyncio.sleep(0.5)
+                            await asyncio.sleep(0.3)
                 
                 if embed_video:
                     video_url = embed_video.get('url')
@@ -772,7 +793,7 @@ async def forward_files_only(source_channel_id, target_channel, token, limit=200
                             file_obj = discord.File(io.BytesIO(video_data), filename=filename)
                             await target_channel.send(f"🎬 **Embed video from {author_name}:**", file=file_obj)
                             file_count += 1
-                            await asyncio.sleep(0.5)
+                            await asyncio.sleep(0.3)
         
         except Exception as e:
             continue
@@ -789,19 +810,21 @@ async def fetch_guild_data(guild_id, token):
             guild = await resp.json()
         async with session.get(f"https://discord.com/api/v10/guilds/{guild_id}/channels", headers=headers) as resp:
             channels = await resp.json()
-        return guild, channels
+        async with session.get(f"https://discord.com/api/v10/guilds/{guild_id}/roles", headers=headers) as resp:
+            roles = await resp.json() if resp.status == 200 else []
+        return guild, channels, roles
 
 # ============================================================
 # SLASH COMMANDS
 # ============================================================
 
-# --- HELP COMMAND ---
+# --- HELP ---
 @bot.tree.command(name="help", description="📋 Show all available commands")
 async def help_cmd(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="🐱 CAT Bot - Command List",
+        title="⚫ Kers0ne Bot - Command List",
         description="Here are all available commands. Use `/` to see them in Discord.",
-        color=discord.Color.gold(),
+        color=discord.Color.dark_gray(),
         timestamp=datetime.utcnow()
     )
     for category in COMMANDS_DATA:
@@ -809,17 +832,118 @@ async def help_cmd(interaction: discord.Interaction):
         embed.add_field(name=f"{category['icon']} {category['category']}", value=cmd_list, inline=False)
     protection_text = "\n".join([f"🔹 {feat['name']} — {feat['description']}" for feat in PROTECTION_DATA])
     embed.add_field(name="🛡️ Auto-Protection Features", value=protection_text, inline=False)
-    embed.set_footer(text="🐈 CAT Bot • All commands are slash (/) commands")
+    embed.set_footer(text="⚫ Kers0ne Bot • All commands are slash (/) commands")
     await interaction.response.send_message(embed=embed, ephemeral=False)
 
-# --- TICKET COMMAND ---
+# --- LOCK CHANNEL ---
+@bot.tree.command(name="lock", description="🔒 Lock a specific channel")
+@app_commands.default_permissions(manage_channels=True)
+@app_commands.describe(channel="Channel to lock", reason="Reason for locking")
+async def lock_channel(interaction: discord.Interaction, channel: discord.TextChannel, reason: str = "No reason provided"):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        await channel.set_permissions(interaction.guild.default_role, send_messages=False)
+        await log_action(interaction.guild, "🔒 CHANNEL LOCKED", interaction.user, f"Channel: #{channel.name}\nReason: {reason}")
+        await interaction.followup.send(f"🔒 **#{channel.name}** has been locked.\nReason: {reason}", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error: {str(e)[:100]}", ephemeral=True)
+
+# --- UNLOCK CHANNEL ---
+@bot.tree.command(name="unlock", description="🔓 Unlock a specific channel")
+@app_commands.default_permissions(manage_channels=True)
+@app_commands.describe(channel="Channel to unlock")
+async def unlock_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        await channel.set_permissions(interaction.guild.default_role, send_messages=None)
+        await log_action(interaction.guild, "🔓 CHANNEL UNLOCKED", interaction.user, f"Channel: #{channel.name}")
+        await interaction.followup.send(f"🔓 **#{channel.name}** has been unlocked.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error: {str(e)[:100]}", ephemeral=True)
+
+# --- TICKET SETUP ---
+@bot.tree.command(name="ticketsetup", description="🎫 Setup ticket system with button")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(channel="Channel to send the ticket panel in")
+async def ticketsetup_cmd(interaction: discord.Interaction, channel: discord.TextChannel):
+    embed = discord.Embed(
+        title="🎫 Ticket System",
+        description="Click the button below to create a support ticket.",
+        color=discord.Color.dark_gray()
+    )
+    embed.set_footer(text="Kers0ne Ticket System")
+    
+    class TicketButtonView(View):
+        @discord.ui.button(label="🎫 Create Ticket", style=discord.ButtonStyle.primary, custom_id="create_ticket")
+        async def ticket_button(self, interaction: discord.Interaction, button: Button):
+            # Check if user already has a ticket
+            ticket_category = discord.utils.get(interaction.guild.categories, name="TICKETS")
+            if not ticket_category:
+                ticket_category = await interaction.guild.create_category("TICKETS")
+            
+            # Check for existing ticket
+            for ch in ticket_category.channels:
+                if ch.name.startswith(f"ticket-{interaction.user.name.lower()}"):
+                    await interaction.response.send_message("❌ You already have an open ticket!", ephemeral=True)
+                    return
+            
+            # Create ticket
+            ticket_name = f"ticket-{interaction.user.name.lower()}-{interaction.user.discriminator}"
+            overwrites = {
+                interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True),
+                interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
+            }
+            admin_role = discord.utils.get(interaction.guild.roles, name="Admin")
+            if admin_role:
+                overwrites[admin_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            
+            ticket_channel = await ticket_category.create_text_channel(
+                ticket_name,
+                overwrites=overwrites,
+                topic=f"Ticket created by {interaction.user}"
+            )
+            
+            ticket_embed = discord.Embed(
+                title="🎫 Ticket Created",
+                description=f"**User:** {interaction.user.mention}\nSupport will assist you shortly.\n\nTo close, use `/closeticket`",
+                color=discord.Color.dark_gray(),
+                timestamp=datetime.utcnow()
+            )
+            await ticket_channel.send(embed=ticket_embed)
+            await ticket_channel.send(f"{interaction.user.mention} - Your ticket has been created!")
+            await log_action(interaction.guild, "🎫 TICKET CREATED", interaction.user, f"Channel: #{ticket_channel.name}")
+            await interaction.response.send_message(f"✅ Ticket created! Check #{ticket_channel.name}", ephemeral=True)
+    
+    await channel.send(embed=embed, view=TicketButtonView())
+    await interaction.response.send_message(f"✅ Ticket panel sent to #{channel.name}", ephemeral=True)
+
+# --- CLOSE TICKET ---
+@bot.tree.command(name="closeticket", description="🔒 Close a ticket channel")
+@app_commands.default_permissions(manage_channels=True)
+@app_commands.describe(reason="Reason for closing")
+async def closeticket_cmd(interaction: discord.Interaction, reason: str = "No reason provided"):
+    channel = interaction.channel
+    if not channel.name.startswith("ticket-"):
+        await interaction.response.send_message("❌ This is not a ticket channel.", ephemeral=True)
+        return
+    
+    await log_action(interaction.guild, "🔒 TICKET CLOSED", interaction.user, f"Reason: {reason}\nChannel: #{channel.name}")
+    await interaction.response.send_message(f"🔒 Ticket closed. Reason: {reason}", ephemeral=True)
+    await channel.send(f"🔒 **Ticket closed by {interaction.user.mention}**\nReason: {reason}")
+    await asyncio.sleep(2)
+    await channel.delete()
+
+# --- TICKET (manual) ---
 @bot.tree.command(name="ticket", description="🎫 Create a support ticket")
 @app_commands.default_permissions(manage_channels=True)
+@app_commands.describe(reason="Reason for the ticket")
 async def ticket_cmd(interaction: discord.Interaction, reason: str = "Support request"):
     guild = interaction.guild
     ticket_category = discord.utils.get(guild.categories, name="TICKETS")
     if not ticket_category:
         ticket_category = await guild.create_category("TICKETS")
+    
     ticket_name = f"ticket-{interaction.user.name.lower()}-{interaction.user.discriminator}"
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(read_messages=False),
@@ -829,50 +953,37 @@ async def ticket_cmd(interaction: discord.Interaction, reason: str = "Support re
     admin_role = discord.utils.get(guild.roles, name="Admin")
     if admin_role:
         overwrites[admin_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-    ticket_channel = await ticket_category.create_text_channel(ticket_name, overwrites=overwrites, topic=f"Ticket created by {interaction.user} - {reason}")
-    embed = discord.Embed(title="🎫 Ticket Created", description=f"**User:** {interaction.user.mention}\n**Reason:** {reason}\n\nSupport will assist you shortly.", color=discord.Color.green(), timestamp=datetime.utcnow())
+    
+    ticket_channel = await ticket_category.create_text_channel(
+        ticket_name,
+        overwrites=overwrites,
+        topic=f"Ticket created by {interaction.user} - {reason}"
+    )
+    
+    embed = discord.Embed(
+        title="🎫 Ticket Created",
+        description=f"**User:** {interaction.user.mention}\n**Reason:** {reason}\n\nSupport will assist you shortly.",
+        color=discord.Color.dark_gray(),
+        timestamp=datetime.utcnow()
+    )
     embed.set_footer(text="To close this ticket, use /closeticket")
     await ticket_channel.send(embed=embed)
     await ticket_channel.send(f"{interaction.user.mention} - Your ticket has been created!")
     await log_action(guild, "🎫 TICKET CREATED", interaction.user, f"Reason: {reason}\nChannel: #{ticket_channel.name}")
     await interaction.response.send_message(f"✅ Ticket created! Check #{ticket_channel.name}", ephemeral=True)
 
-# --- CLOSE TICKET COMMAND ---
-@bot.tree.command(name="closeticket", description="🔒 Close a ticket channel")
-@app_commands.default_permissions(manage_channels=True)
-async def closeticket_cmd(interaction: discord.Interaction, reason: str = "No reason provided"):
-    channel = interaction.channel
-    if not channel.name.startswith("ticket-"):
-        await interaction.response.send_message("❌ This is not a ticket channel.", ephemeral=True)
-        return
-    messages = []
-    async for msg in channel.history(limit=100):
-        messages.append(f"{msg.author}: {msg.content}")
-    transcript = "\n".join(messages)
-    await log_action(interaction.guild, "🔒 TICKET CLOSED", interaction.user, f"Reason: {reason}\nChannel: #{channel.name}")
-    await interaction.response.send_message(f"🔒 Ticket closed. Reason: {reason}", ephemeral=True)
-    await channel.send(f"🔒 **Ticket closed by {interaction.user.mention}**\nReason: {reason}")
-    await asyncio.sleep(2)
-    await channel.delete()
-
-# --- ANNOUNCE COMMAND ---
+# --- ANNOUNCE ---
 @bot.tree.command(name="announce", description="📢 Send an announcement embed")
 @app_commands.default_permissions(administrator=True)
-@app_commands.describe(channel="Channel to send announcement", title="Announcement title", message="Announcement message", color="Color (optional)")
-async def announce_cmd(interaction: discord.Interaction, channel: discord.TextChannel, title: str, message: str, color: str = None):
-    embed_color = discord.Color.blue()
-    if color:
-        try:
-            embed_color = discord.Color(int(color.replace("#", ""), 16))
-        except:
-            pass
-    embed = discord.Embed(title=title, description=message, color=embed_color, timestamp=datetime.utcnow())
+@app_commands.describe(channel="Channel to send announcement", title="Announcement title", message="Announcement message")
+async def announce_cmd(interaction: discord.Interaction, channel: discord.TextChannel, title: str, message: str):
+    embed = discord.Embed(title=title, description=message, color=discord.Color.dark_gray(), timestamp=datetime.utcnow())
     embed.set_footer(text=f"Announcement by {interaction.user}")
     await channel.send(embed=embed)
     await log_action(interaction.guild, "📢 ANNOUNCEMENT", interaction.user, f"Channel: #{channel.name}\nTitle: {title}")
     await interaction.response.send_message(f"✅ Announcement sent to #{channel.name}", ephemeral=True)
 
-# --- POLL COMMAND ---
+# --- POLL ---
 @bot.tree.command(name="poll", description="📊 Create a poll with reactions")
 @app_commands.default_permissions(administrator=True)
 @app_commands.describe(channel="Channel to send poll", question="Poll question", option1="Option 1", option2="Option 2", option3="Option 3 (optional)", option4="Option 4 (optional)")
@@ -886,7 +997,7 @@ async def poll_cmd(interaction: discord.Interaction, channel: discord.TextChanne
     poll_text = f"**{question}**\n\n"
     for i, opt in enumerate(options):
         poll_text += f"{emojis[i]} {opt}\n"
-    embed = discord.Embed(title="📊 Poll", description=poll_text, color=discord.Color.blue(), timestamp=datetime.utcnow())
+    embed = discord.Embed(title="📊 Poll", description=poll_text, color=discord.Color.dark_gray(), timestamp=datetime.utcnow())
     embed.set_footer(text=f"Poll created by {interaction.user}")
     poll_msg = await channel.send(embed=embed)
     for i in range(len(options)):
@@ -894,17 +1005,17 @@ async def poll_cmd(interaction: discord.Interaction, channel: discord.TextChanne
     await log_action(interaction.guild, "📊 POLL CREATED", interaction.user, f"Channel: #{channel.name}\nQuestion: {question}")
     await interaction.response.send_message(f"✅ Poll created in #{channel.name}", ephemeral=True)
 
-# --- SLOWMODE COMMAND ---
+# --- SLOWMODE ---
 @bot.tree.command(name="slowmode", description="⏱️ Set slowmode in a channel")
 @app_commands.default_permissions(manage_channels=True)
-@app_commands.describe(seconds="Seconds between messages (0 to disable)", channel="Channel (default: current)")
+@app_commands.describe(seconds="Seconds between messages (0 to disable)")
 async def slowmode_cmd(interaction: discord.Interaction, seconds: int, channel: discord.TextChannel = None):
     target = channel or interaction.channel
     await target.edit(slowmode_delay=seconds)
     await log_action(interaction.guild, "⏱️ SLOWMODE SET", interaction.user, f"Channel: #{target.name}\nSeconds: {seconds}")
     await interaction.response.send_message(f"✅ Slowmode set to {seconds} seconds in #{target.name}", ephemeral=True)
 
-# --- NICK COMMAND ---
+# --- NICK ---
 @bot.tree.command(name="nick", description="✏️ Change a user's nickname")
 @app_commands.default_permissions(manage_nicknames=True)
 @app_commands.describe(user="The user", nickname="New nickname (leave empty to reset)")
@@ -914,7 +1025,7 @@ async def nick_cmd(interaction: discord.Interaction, user: discord.Member, nickn
     await log_action(interaction.guild, "✏️ NICKNAME CHANGED", interaction.user, f"User: {user}\nOld: {old_nick}\nNew: {nickname or 'Reset'}")
     await interaction.response.send_message(f"✅ Changed nickname for {user.mention} to {nickname or 'default'}", ephemeral=True)
 
-# --- CLEAN COMMAND ---
+# --- CLEAN ---
 @bot.tree.command(name="clean", description="Deep clean chat messages (keeps files/images).")
 @app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(amount="Number of recent messages to check (e.g., 100, 1000)")
@@ -940,52 +1051,78 @@ async def clean_channel(interaction: discord.Interaction, amount: int = 1000):
     except Exception as e:
         print(f"Unexpected error during clean: {e}")
 
-# --- FORWARD FILES ONLY ---
-@bot.tree.command(name="forward", description="📤 Forward ONLY videos, photos, .txt (NO XML)")
+# --- FORWARD ---
+@bot.tree.command(name="forward", description="📤 Forward videos, photos, .txt from ANY channel")
 @app_commands.default_permissions(administrator=True)
-@app_commands.describe(source_channel_id="ID of the channel to copy files from", target_channel="Channel to send files to", limit="Max files to copy (default 1000)")
+@app_commands.describe(source_channel_id="ID of the channel to copy from", target_channel="Channel to send to", limit="Max files to copy (default 1000)")
 async def forward_files_cmd(interaction: discord.Interaction, source_channel_id: str, target_channel: discord.TextChannel, limit: int = 1000):
-    await interaction.response.send_message(f"📤 **Forwarding files only...**\nSource: `{source_channel_id}`\nTarget: #{target_channel.name}\nLimit: {limit}", ephemeral=True)
+    await interaction.response.send_message(f"📤 **Forwarding files...**\nSource: `{source_channel_id}`\nTarget: #{target_channel.name}\nLimit: {limit}", ephemeral=True)
     try:
         file_count, skipped_count = await forward_files_only(source_channel_id, target_channel, bot.user_token, limit)
-        await log_action(interaction.guild, "📤 FILES FORWARDED", interaction.user, f"Forwarded {file_count} files\nSkipped {skipped_count} files\nTo: #{target_channel.name}")
+        await log_action(interaction.guild, "📤 FILES FORWARDED", interaction.user, f"Forwarded {file_count} files\nSkipped {skipped_count}\nTo: #{target_channel.name}")
         await interaction.followup.send(f"✅ **Forward Complete!**\n📎 Forwarded: {file_count}\n🚫 Skipped: {skipped_count}\n📤 To: #{target_channel.name}", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:500]}", ephemeral=True)
 
-# --- CLONE COMMAND ---
-@bot.tree.command(name="clone", description="📋 Clone server structure")
+# --- CLONE ---
+@bot.tree.command(name="clone", description="📋 Clone server structure + roles")
 @app_commands.default_permissions(administrator=True)
 @app_commands.describe(source_id="Source server ID", target_id="Target server ID")
 async def clone_cmd(interaction: discord.Interaction, source_id: str, target_id: str):
     await interaction.response.send_message("📋 Cloning...", ephemeral=True)
     try:
-        src_data, src_channels = await fetch_guild_data(source_id, bot.user_token)
+        src_data, src_channels, src_roles = await fetch_guild_data(source_id, bot.user_token)
         target = bot.get_guild(int(target_id))
         if not target:
             await interaction.followup.send("❌ Target not found", ephemeral=True)
             return
+        
+        # Delete existing channels
         for ch in target.channels:
             try:
                 await ch.delete()
             except:
                 pass
+        
+        # Clone roles
+        role_map = {}
+        for role in src_roles:
+            if role['name'] != '@everyone':
+                try:
+                    new_role = await target.create_role(
+                        name=role['name'],
+                        permissions=discord.Permissions(role['permissions']),
+                        color=discord.Color(role['color']) if role['color'] else discord.Color.default(),
+                        hoist=role['hoist'],
+                        mentionable=role['mentionable']
+                    )
+                    role_map[role['id']] = new_role
+                    await asyncio.sleep(0.3)
+                except:
+                    pass
+        
+        # Clone categories
         cat_map = {}
         for cat in [c for c in src_channels if c['type'] == 4]:
             new = await target.create_category(cat['name'], position=cat.get('position', 0))
             cat_map[cat['id']] = new
             await asyncio.sleep(0.3)
+        
+        # Clone text channels
         text_count = 0
         for ch in [c for c in src_channels if c['type'] == 0]:
             parent = cat_map.get(ch.get('parent_id')) if ch.get('parent_id') else None
             await target.create_text_channel(ch['name'], category=parent, position=ch.get('position', 0), topic=ch.get('topic', ''))
             text_count += 1
             await asyncio.sleep(0.3)
+        
+        # Clone voice channels
         for ch in [c for c in src_channels if c['type'] == 2]:
             parent = cat_map.get(ch.get('parent_id')) if ch.get('parent_id') else None
             await target.create_voice_channel(ch['name'], category=parent, position=ch.get('position', 0), bitrate=ch.get('bitrate', 64000))
             await asyncio.sleep(0.3)
-        await interaction.followup.send(f"✅ Cloned {text_count} channels", ephemeral=True)
+        
+        await interaction.followup.send(f"✅ Cloned {text_count} channels and {len(role_map)} roles", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:200]}", ephemeral=True)
 
@@ -1011,7 +1148,7 @@ async def kick_cmd(interaction: discord.Interaction, user: discord.Member, reaso
 @app_commands.describe(user="The user to timeout", minutes="Duration in minutes", reason="Reason")
 async def timeout_cmd(interaction: discord.Interaction, user: discord.Member, minutes: int = 60, reason: str = "No reason"):
     await interaction.response.defer(ephemeral=True)
-    await user.timeout(timedelta(minutes=minutes), reason=f"CAT: {reason}")
+    await user.timeout(timedelta(minutes=minutes), reason=f"Kers0ne: {reason}")
     await log_action(interaction.guild, "⏰ TIMEOUT", user, f"{minutes}min, Reason: {reason}")
     await interaction.followup.send(f"✅ {user} timed out for {minutes} minutes", ephemeral=True)
 
@@ -1111,10 +1248,10 @@ async def lockdown_cmd(interaction: discord.Interaction):
     await log_action(interaction.guild, "🔒 LOCKDOWN", interaction.user, "Server locked")
     await interaction.followup.send("🔒 Server locked", ephemeral=True)
 
-# --- UNLOCK ---
-@bot.tree.command(name="unlock", description="🔓 Unlock server")
+# --- UNLOCK SERVER ---
+@bot.tree.command(name="unlockserver", description="🔓 Unlock server")
 @app_commands.default_permissions(administrator=True)
-async def unlock_cmd(interaction: discord.Interaction):
+async def unlockserver_cmd(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     for ch in interaction.guild.channels:
         if isinstance(ch, discord.TextChannel):
@@ -1177,7 +1314,7 @@ async def setup_cmd(interaction: discord.Interaction):
 @app_commands.default_permissions(administrator=True)
 async def stats_cmd(interaction: discord.Interaction):
     guild = interaction.guild
-    embed = discord.Embed(title=f"📊 Server Stats - {guild.name}", color=discord.Color.blue())
+    embed = discord.Embed(title=f"📊 Server Stats - {guild.name}", color=discord.Color.dark_gray())
     embed.add_field(name="👥 Members", value=guild.member_count, inline=True)
     embed.add_field(name="💬 Channels", value=len(guild.channels), inline=True)
     embed.add_field(name="📁 Categories", value=len(guild.categories), inline=True)

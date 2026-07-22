@@ -1,13 +1,15 @@
 import discord
-from discord import app_commands
+from discord import app_commands, Webhook
 from discord.ext import commands
-from discord.ui import Button, View, Select
+from discord.ui import Button, View, Select, Modal, TextInput
 import asyncio
 import os
 import aiohttp
 from datetime import datetime, timedelta
 import io
 import threading
+import json
+import random
 from flask import Flask, jsonify, render_template_string
 
 # ============================================================
@@ -17,8 +19,8 @@ flask_app = Flask(__name__)
 
 COMMANDS_DATA = [
     {"category": "🛡️ Moderation", "icon": "🛡️", "commands": [
-        {"name": "/ban", "description": "Ban a user with confirm/cancel buttons", "permissions": "Ban Members"},
-        {"name": "/kick", "description": "Kick a user with confirm/cancel buttons", "permissions": "Kick Members"},
+        {"name": "/ban", "description": "Ban a user with confirm/cancel", "permissions": "Ban Members"},
+        {"name": "/kick", "description": "Kick a user with confirm/cancel", "permissions": "Kick Members"},
         {"name": "/timeout", "description": "Timeout a user with custom duration", "permissions": "Moderate Members"},
         {"name": "/untimeout", "description": "Remove timeout from a user", "permissions": "Moderate Members"},
         {"name": "/mute", "description": "Mute a user (adds Muted role)", "permissions": "Manage Roles"},
@@ -26,7 +28,10 @@ COMMANDS_DATA = [
         {"name": "/punish", "description": "Open punishment selector menu", "permissions": "Moderate Members"},
         {"name": "/removeroles", "description": "Remove all roles from a user", "permissions": "Manage Roles"},
         {"name": "/nick", "description": "Change a user's nickname", "permissions": "Manage Nicknames"},
-        {"name": "/slowmode", "description": "Set slowmode in a channel", "permissions": "Manage Channels"}
+        {"name": "/slowmode", "description": "Set slowmode in a channel", "permissions": "Manage Channels"},
+        {"name": "/warn", "description": "Warn a user", "permissions": "Moderate Members"},
+        {"name": "/warnings", "description": "View warnings for a user", "permissions": "Moderate Members"},
+        {"name": "/clearwarnings", "description": "Clear all warnings for a user", "permissions": "Moderate Members"}
     ]},
     {"category": "🔒 Channel Lock", "icon": "🔒", "commands": [
         {"name": "/lock", "description": "Lock a specific channel", "permissions": "Manage Channels"},
@@ -42,30 +47,41 @@ COMMANDS_DATA = [
         {"name": "/deletefiles", "description": "Delete ONLY messages with files (keep text)", "permissions": "Manage Messages"}
     ]},
     {"category": "📤 Forward & Clone", "icon": "📤", "commands": [
-        {"name": "/forward", "description": "Forward videos, photos, .txt from ANY channel", "permissions": "Administrator"},
-        {"name": "/clone", "description": "Clone server structure + roles", "permissions": "Administrator"}
+        {"name": "/forward", "description": "Forward ALL files from ANY channel", "permissions": "Administrator"},
+        {"name": "/clone", "description": "Clone server structure + roles (FIXED)", "permissions": "Administrator"}
     ]},
     {"category": "🔒 Server Control", "icon": "🔒", "commands": [
         {"name": "/lockdown", "description": "Lock down the entire server", "permissions": "Administrator"},
-        {"name": "/unlock", "description": "Unlock the server", "permissions": "Administrator"},
-        {"name": "/deleteallchannels", "description": "DELETE EVERY CHANNEL (with confirmation)", "permissions": "Administrator"}
+        {"name": "/unlockserver", "description": "Unlock the server", "permissions": "Administrator"},
+        {"name": "/deleteallchannels", "description": "DELETE EVERY CHANNEL", "permissions": "Administrator"}
     ]},
     {"category": "🎫 Tickets", "icon": "🎫", "commands": [
         {"name": "/ticket", "description": "Create a support ticket", "permissions": "Manage Channels"},
         {"name": "/ticketsetup", "description": "Setup ticket system with button", "permissions": "Administrator"},
         {"name": "/closeticket", "description": "Close a ticket channel", "permissions": "Manage Channels"}
     ]},
+    {"category": "🌐 Webhooks", "icon": "🌐", "commands": [
+        {"name": "/create-webhook", "description": "Create a webhook in a channel", "permissions": "Manage Webhooks"},
+        {"name": "/spam-webhook", "description": "Spam messages via webhook", "permissions": "Manage Webhooks"},
+        {"name": "/delete-webhook", "description": "Delete a webhook", "permissions": "Manage Webhooks"}
+    ]},
+    {"category": "📝 Embeds", "icon": "📝", "commands": [
+        {"name": "/create-embed", "description": "Create a custom embed", "permissions": "Administrator"},
+        {"name": "/embed", "description": "Send an embed to a channel", "permissions": "Administrator"}
+    ]},
     {"category": "📢 Utility", "icon": "📢", "commands": [
         {"name": "/help", "description": "Show all available commands", "permissions": "Everyone"},
         {"name": "/announce", "description": "Send an announcement embed", "permissions": "Administrator"},
         {"name": "/poll", "description": "Create a poll with reactions", "permissions": "Administrator"},
-        {"name": "/setup", "description": "Setup Kers0ne Security logs channel", "permissions": "Administrator"},
-        {"name": "/stats", "description": "Show server statistics", "permissions": "Administrator"}
+        {"name": "/setup", "description": "Setup Kers0ne Security logs", "permissions": "Administrator"},
+        {"name": "/stats", "description": "Show server statistics", "permissions": "Administrator"},
+        {"name": "/say", "description": "Make the bot say something", "permissions": "Administrator"},
+        {"name": "/dm", "description": "DM a user", "permissions": "Administrator"}
     ]},
     {"category": "🖱️ Context Menus", "icon": "🖱️", "commands": [
         {"name": "Right-click → Ban User", "description": "Quick ban from user menu", "permissions": "Ban Members"},
         {"name": "Right-click → Kick User", "description": "Quick kick from user menu", "permissions": "Kick Members"},
-        {"name": "Right-click → Timeout User", "description": "Quick 60min timeout from user menu", "permissions": "Moderate Members"}
+        {"name": "Right-click → Timeout User", "description": "Quick 60min timeout", "permissions": "Moderate Members"}
     ]}
 ]
 
@@ -321,6 +337,11 @@ CONFIG = {
 }
 
 # ============================================================
+# WARNINGS DATABASE
+# ============================================================
+warnings_db = {}
+
+# ============================================================
 # LOGS CHANNEL SETUP
 # ============================================================
 async def setup_logs_channel(guild):
@@ -568,6 +589,39 @@ class DeleteFilesConfirmView(View):
         self.confirmed = False
         self.stop()
 
+class EmbedModal(Modal, title="Create Embed"):
+    title_input = TextInput(label="Title", placeholder="Enter embed title...", required=False)
+    description_input = TextInput(label="Description", placeholder="Enter embed description...", style=discord.TextStyle.paragraph, required=False)
+    color_input = TextInput(label="Color (hex)", placeholder="#000000 or random", required=False)
+    footer_input = TextInput(label="Footer", placeholder="Enter footer text...", required=False)
+    image_input = TextInput(label="Image URL", placeholder="https://example.com/image.png", required=False)
+    thumbnail_input = TextInput(label="Thumbnail URL", placeholder="https://example.com/thumb.png", required=False)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        embed = discord.Embed()
+        if self.title_input.value:
+            embed.title = self.title_input.value
+        if self.description_input.value:
+            embed.description = self.description_input.value
+        if self.color_input.value:
+            try:
+                if self.color_input.value.lower() == "random":
+                    embed.color = discord.Color.random()
+                else:
+                    embed.color = discord.Color(int(self.color_input.value.replace("#", ""), 16))
+            except:
+                embed.color = discord.Color.dark_gray()
+        if self.footer_input.value:
+            embed.set_footer(text=self.footer_input.value)
+        if self.image_input.value:
+            embed.set_image(url=self.image_input.value)
+        if self.thumbnail_input.value:
+            embed.set_thumbnail(url=self.thumbnail_input.value)
+        embed.timestamp = datetime.utcnow()
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+        await log_action(interaction.guild, "📝 EMBED CREATED", interaction.user, f"Title: {self.title_input.value or 'None'}")
+
 # ============================================================
 # ANTI-RAID / ANTI-SPAM / ANTI-NUKE
 # ============================================================
@@ -665,38 +719,31 @@ async def download_file(url):
             return None
 
 # ============================================================
-# FORWARD — ONLY VIDEOS, PHOTOS, TXT (NO XML)
+# FORWARD — ALL FILES
 # ============================================================
 async def forward_files_only(source_channel_id, target_channel, token, limit=2000):
-    ALLOWED_EXTENSIONS = {
-        '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.tiff', '.svg',
-        '.mp4', '.mov', '.avi', '.webm', '.mkv', '.flv', '.wmv', '.m4v', '.3gp', '.mpg', '.mpeg',
-        '.txt'
-    }
-    
-    BLOCKED_EXTENSIONS = {
-        '.xml', '.json', '.yaml', '.yml', '.toml', '.csv', '.xlsx', '.xls',
-        '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.zip', '.rar', '.7z',
-        '.exe', '.msi', '.dmg', '.apk', '.deb', '.rpm'
-    }
-    
     messages = []
     
     try:
         async with aiohttp.ClientSession() as session:
             headers = {"Authorization": token}
             
-            # Check if channel exists
+            url = "https://discord.com/api/v10/users/@me"
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 401:
+                    raise Exception("❌ **Invalid or expired USER_TOKEN!**")
+                elif resp.status != 200:
+                    raise Exception(f"❌ Token error: {resp.status}")
+            
             url = f"https://discord.com/api/v10/channels/{source_channel_id}"
             async with session.get(url, headers=headers) as resp:
                 if resp.status == 404:
                     raise Exception(f"❌ Channel `{source_channel_id}` not found!")
                 elif resp.status == 403:
-                    raise Exception(f"❌ Cannot access channel `{source_channel_id}`! Make sure your token has access.")
+                    raise Exception(f"❌ Cannot access channel `{source_channel_id}`!")
                 elif resp.status != 200:
                     raise Exception(f"❌ API error: {resp.status}")
             
-            # Fetch messages
             url = f"https://discord.com/api/v10/channels/{source_channel_id}/messages?limit=100"
             while len(messages) < limit:
                 async with session.get(url, headers=headers) as resp:
@@ -716,7 +763,6 @@ async def forward_files_only(source_channel_id, target_channel, token, limit=200
         raise Exception("No messages found in this channel!")
     
     file_count = 0
-    skipped_count = 0
     
     for msg in messages:
         try:
@@ -728,28 +774,11 @@ async def forward_files_only(source_channel_id, target_channel, token, limit=200
             if not attachments:
                 continue
             
-            has_allowed_file = False
-            allowed_files = []
-            
-            for att in attachments:
-                filename = att['filename'].lower()
-                is_allowed = any(filename.endswith(ext) for ext in ALLOWED_EXTENSIONS)
-                is_blocked = any(filename.endswith(ext) for ext in BLOCKED_EXTENSIONS)
-                
-                if is_allowed and not is_blocked:
-                    has_allowed_file = True
-                    allowed_files.append(att)
-                else:
-                    skipped_count += 1
-            
-            if not has_allowed_file:
-                continue
-            
             header = f"📎 **{author_name}** (`{author_id}`) [{timestamp[:10]} {timestamp[11:19]}]:"
             await target_channel.send(header)
             await asyncio.sleep(0.2)
             
-            for att in allowed_files:
+            for att in attachments:
                 try:
                     file_url = att['url']
                     filename = att['filename']
@@ -767,41 +796,14 @@ async def forward_files_only(source_channel_id, target_channel, token, limit=200
                         await asyncio.sleep(0.3)
                 except Exception as e:
                     await target_channel.send(f"⚠️ Failed to download: {str(e)[:50]}")
-            
-            embeds = msg.get('embeds', [])
-            for embed_data in embeds:
-                embed_image = embed_data.get('image', {})
-                embed_video = embed_data.get('video', {})
-                
-                if embed_image:
-                    img_url = embed_image.get('url')
-                    if img_url:
-                        img_data = await download_file(img_url)
-                        if img_data:
-                            filename = f"embed_image_{datetime.utcnow().timestamp()}.png"
-                            file_obj = discord.File(io.BytesIO(img_data), filename=filename)
-                            await target_channel.send(f"🖼️ **Embed image from {author_name}:**", file=file_obj)
-                            file_count += 1
-                            await asyncio.sleep(0.3)
-                
-                if embed_video:
-                    video_url = embed_video.get('url')
-                    if video_url:
-                        video_data = await download_file(video_url)
-                        if video_data:
-                            filename = f"embed_video_{datetime.utcnow().timestamp()}.mp4"
-                            file_obj = discord.File(io.BytesIO(video_data), filename=filename)
-                            await target_channel.send(f"🎬 **Embed video from {author_name}:**", file=file_obj)
-                            file_count += 1
-                            await asyncio.sleep(0.3)
         
         except Exception as e:
             continue
     
-    return file_count, skipped_count
+    return file_count
 
 # ============================================================
-# FETCH GUILD DATA
+# FETCH GUILD DATA (FIXED FOR ROLES)
 # ============================================================
 async def fetch_guild_data(guild_id, token):
     async with aiohttp.ClientSession() as session:
@@ -809,7 +811,7 @@ async def fetch_guild_data(guild_id, token):
         async with session.get(f"https://discord.com/api/v10/guilds/{guild_id}", headers=headers) as resp:
             guild = await resp.json()
         async with session.get(f"https://discord.com/api/v10/guilds/{guild_id}/channels", headers=headers) as resp:
-            channels = await resp.json()
+            channels = await resp.json() if resp.status == 200 else []
         async with session.get(f"https://discord.com/api/v10/guilds/{guild_id}/roles", headers=headers) as resp:
             roles = await resp.json() if resp.status == 200 else []
         return guild, channels, roles
@@ -835,7 +837,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.set_footer(text="⚫ Kers0ne Bot • All commands are slash (/) commands")
     await interaction.response.send_message(embed=embed, ephemeral=False)
 
-# --- LOCK CHANNEL ---
+# --- LOCK ---
 @bot.tree.command(name="lock", description="🔒 Lock a specific channel")
 @app_commands.default_permissions(manage_channels=True)
 @app_commands.describe(channel="Channel to lock", reason="Reason for locking")
@@ -848,7 +850,7 @@ async def lock_channel(interaction: discord.Interaction, channel: discord.TextCh
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:100]}", ephemeral=True)
 
-# --- UNLOCK CHANNEL ---
+# --- UNLOCK ---
 @bot.tree.command(name="unlock", description="🔓 Unlock a specific channel")
 @app_commands.default_permissions(manage_channels=True)
 @app_commands.describe(channel="Channel to unlock")
@@ -860,6 +862,203 @@ async def unlock_channel(interaction: discord.Interaction, channel: discord.Text
         await interaction.followup.send(f"🔓 **#{channel.name}** has been unlocked.", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:100]}", ephemeral=True)
+
+# --- LOCKALL ---
+@bot.tree.command(name="lockall", description="🔒 Lock ALL channels")
+@app_commands.default_permissions(administrator=True)
+async def lockall_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    count = 0
+    for ch in interaction.guild.channels:
+        try:
+            if isinstance(ch, (discord.TextChannel, discord.VoiceChannel, discord.ForumChannel, discord.StageChannel)):
+                await ch.set_permissions(interaction.guild.default_role, send_messages=False, connect=False, speak=False)
+                count += 1
+                await asyncio.sleep(0.2)
+        except:
+            pass
+    await log_action(interaction.guild, "🔒 LOCKALL", interaction.user, f"Locked {count} channels")
+    await interaction.followup.send(f"🔒 Locked {count} channels", ephemeral=True)
+
+# --- UNLOCKALL ---
+@bot.tree.command(name="unlockall", description="🔓 Unlock ALL channels")
+@app_commands.default_permissions(administrator=True)
+async def unlockall_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    count = 0
+    for ch in interaction.guild.channels:
+        try:
+            if isinstance(ch, (discord.TextChannel, discord.VoiceChannel, discord.ForumChannel, discord.StageChannel)):
+                await ch.set_permissions(interaction.guild.default_role, send_messages=None, connect=None, speak=None)
+                count += 1
+                await asyncio.sleep(0.2)
+        except:
+            pass
+    await log_action(interaction.guild, "🔓 UNLOCKALL", interaction.user, f"Unlocked {count} channels")
+    await interaction.followup.send(f"🔓 Unlocked {count} channels", ephemeral=True)
+
+# --- WARN ---
+@bot.tree.command(name="warn", description="⚠️ Warn a user")
+@app_commands.default_permissions(moderate_members=True)
+@app_commands.describe(user="The user to warn", reason="Reason for warning")
+async def warn_cmd(interaction: discord.Interaction, user: discord.Member, reason: str = "No reason"):
+    if interaction.guild.id not in warnings_db:
+        warnings_db[interaction.guild.id] = {}
+    if user.id not in warnings_db[interaction.guild.id]:
+        warnings_db[interaction.guild.id][user.id] = []
+    
+    warnings_db[interaction.guild.id][user.id].append({
+        "reason": reason,
+        "moderator": interaction.user.id,
+        "timestamp": datetime.utcnow().isoformat()
+    })
+    
+    await log_action(interaction.guild, "⚠️ USER WARNED", user, f"Reason: {reason}\nModerator: {interaction.user}")
+    await interaction.response.send_message(f"⚠️ **{user.mention}** has been warned. Reason: {reason}", ephemeral=True)
+
+# --- WARNINGS ---
+@bot.tree.command(name="warnings", description="📋 View warnings for a user")
+@app_commands.default_permissions(moderate_members=True)
+@app_commands.describe(user="The user to check")
+async def warnings_cmd(interaction: discord.Interaction, user: discord.Member):
+    guild_warnings = warnings_db.get(interaction.guild.id, {})
+    user_warnings = guild_warnings.get(user.id, [])
+    
+    if not user_warnings:
+        await interaction.response.send_message(f"✅ **{user.mention}** has no warnings.", ephemeral=True)
+        return
+    
+    embed = discord.Embed(title=f"⚠️ Warnings for {user}", color=discord.Color.dark_gray())
+    for i, warn in enumerate(user_warnings, 1):
+        mod = interaction.guild.get_member(warn['moderator'])
+        mod_name = mod.mention if mod else "Unknown"
+        embed.add_field(
+            name=f"Warning #{i}",
+            value=f"Reason: {warn['reason']}\nModerator: {mod_name}\nTime: {warn['timestamp'][:16]}",
+            inline=False
+        )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# --- CLEAR WARNINGS ---
+@bot.tree.command(name="clearwarnings", description="🗑️ Clear all warnings for a user")
+@app_commands.default_permissions(moderate_members=True)
+@app_commands.describe(user="The user to clear warnings for")
+async def clearwarnings_cmd(interaction: discord.Interaction, user: discord.Member):
+    if interaction.guild.id in warnings_db:
+        if user.id in warnings_db[interaction.guild.id]:
+            del warnings_db[interaction.guild.id][user.id]
+            await log_action(interaction.guild, "🗑️ WARNINGS CLEARED", user, f"By: {interaction.user}")
+            await interaction.response.send_message(f"✅ Cleared all warnings for **{user.mention}**", ephemeral=True)
+            return
+    await interaction.response.send_message(f"✅ **{user.mention}** has no warnings to clear.", ephemeral=True)
+
+# --- CREATE WEBHOOK ---
+@bot.tree.command(name="create-webhook", description="🌐 Create a webhook in a channel")
+@app_commands.default_permissions(manage_webhooks=True)
+@app_commands.describe(channel="Channel to create webhook in", name="Webhook name", avatar="Avatar URL (optional)")
+async def create_webhook(interaction: discord.Interaction, channel: discord.TextChannel, name: str, avatar: str = None):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        webhook = await channel.create_webhook(name=name, avatar=avatar)
+        await log_action(interaction.guild, "🌐 WEBHOOK CREATED", interaction.user, f"Name: {name}\nChannel: #{channel.name}")
+        await interaction.followup.send(
+            f"✅ Webhook created!\n"
+            f"**Name:** {webhook.name}\n"
+            f"**Channel:** #{channel.name}\n"
+            f"**URL:** `{webhook.url}`\n"
+            f"Use `/spam-webhook` to spam messages!",
+            ephemeral=True
+        )
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error: {str(e)[:100]}", ephemeral=True)
+
+# --- SPAM WEBHOOK ---
+@bot.tree.command(name="spam-webhook", description="🌐 Spam messages via webhook")
+@app_commands.default_permissions(manage_webhooks=True)
+@app_commands.describe(webhook_url="Webhook URL", message="Message to spam", count="Number of messages to send")
+async def spam_webhook(interaction: discord.Interaction, webhook_url: str, message: str, count: int = 10):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        if count > 100:
+            await interaction.followup.send("❌ Max 100 messages per spam.", ephemeral=True)
+            return
+        
+        sent = 0
+        for i in range(count):
+            async with aiohttp.ClientSession() as session:
+                data = {"content": f"{message} #{i+1}"}
+                async with session.post(webhook_url, json=data) as resp:
+                    if resp.status == 204:
+                        sent += 1
+                    await asyncio.sleep(0.2)
+        
+        await log_action(interaction.guild, "🌐 WEBHOOK SPAM", interaction.user, f"Sent {sent} messages")
+        await interaction.followup.send(f"✅ Spammed {sent} messages via webhook!", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error: {str(e)[:100]}", ephemeral=True)
+
+# --- DELETE WEBHOOK ---
+@bot.tree.command(name="delete-webhook", description="🌐 Delete a webhook")
+@app_commands.default_permissions(manage_webhooks=True)
+@app_commands.describe(webhook_url="Webhook URL to delete")
+async def delete_webhook(interaction: discord.Interaction, webhook_url: str):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(webhook_url) as resp:
+                if resp.status == 204:
+                    await log_action(interaction.guild, "🌐 WEBHOOK DELETED", interaction.user, f"URL: {webhook_url[:50]}...")
+                    await interaction.followup.send("✅ Webhook deleted!", ephemeral=True)
+                else:
+                    await interaction.followup.send(f"❌ Failed to delete webhook. Status: {resp.status}", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error: {str(e)[:100]}", ephemeral=True)
+
+# --- CREATE EMBED ---
+@bot.tree.command(name="create-embed", description="📝 Create a custom embed")
+@app_commands.default_permissions(administrator=True)
+async def create_embed(interaction: discord.Interaction):
+    modal = EmbedModal()
+    await interaction.response.send_modal(modal)
+
+# --- EMBED ---
+@bot.tree.command(name="embed", description="📝 Send an embed to a channel")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(channel="Channel to send embed", title="Embed title", description="Embed description", color="Hex color (e.g. #ff0000)", footer="Footer text")
+async def embed_cmd(interaction: discord.Interaction, channel: discord.TextChannel, title: str, description: str, color: str = None, footer: str = None):
+    embed = discord.Embed(title=title, description=description, color=discord.Color.dark_gray())
+    if color:
+        try:
+            embed.color = discord.Color(int(color.replace("#", ""), 16))
+        except:
+            pass
+    if footer:
+        embed.set_footer(text=footer)
+    embed.timestamp = datetime.utcnow()
+    await channel.send(embed=embed)
+    await log_action(interaction.guild, "📝 EMBED SENT", interaction.user, f"Channel: #{channel.name}\nTitle: {title}")
+    await interaction.response.send_message(f"✅ Embed sent to #{channel.name}", ephemeral=True)
+
+# --- SAY ---
+@bot.tree.command(name="say", description="💬 Make the bot say something")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(message="Message to say", channel="Channel to say in")
+async def say_cmd(interaction: discord.Interaction, message: str, channel: discord.TextChannel = None):
+    target = channel or interaction.channel
+    await target.send(message)
+    await interaction.response.send_message(f"✅ Message sent to #{target.name}", ephemeral=True)
+
+# --- DM ---
+@bot.tree.command(name="dm", description="📩 DM a user")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(user="User to DM", message="Message to send")
+async def dm_cmd(interaction: discord.Interaction, user: discord.Member, message: str):
+    try:
+        await user.send(message)
+        await log_action(interaction.guild, "📩 DM SENT", interaction.user, f"To: {user}\nMessage: {message[:50]}...")
+        await interaction.response.send_message(f"✅ DM sent to {user.mention}", ephemeral=True)
+    except:
+        await interaction.response.send_message("❌ Failed to DM user. They may have DMs disabled.", ephemeral=True)
 
 # --- TICKET SETUP ---
 @bot.tree.command(name="ticketsetup", description="🎫 Setup ticket system with button")
@@ -876,18 +1075,15 @@ async def ticketsetup_cmd(interaction: discord.Interaction, channel: discord.Tex
     class TicketButtonView(View):
         @discord.ui.button(label="🎫 Create Ticket", style=discord.ButtonStyle.primary, custom_id="create_ticket")
         async def ticket_button(self, interaction: discord.Interaction, button: Button):
-            # Check if user already has a ticket
             ticket_category = discord.utils.get(interaction.guild.categories, name="TICKETS")
             if not ticket_category:
                 ticket_category = await interaction.guild.create_category("TICKETS")
             
-            # Check for existing ticket
             for ch in ticket_category.channels:
                 if ch.name.startswith(f"ticket-{interaction.user.name.lower()}"):
                     await interaction.response.send_message("❌ You already have an open ticket!", ephemeral=True)
                     return
             
-            # Create ticket
             ticket_name = f"ticket-{interaction.user.name.lower()}-{interaction.user.discriminator}"
             overwrites = {
                 interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
@@ -934,7 +1130,7 @@ async def closeticket_cmd(interaction: discord.Interaction, reason: str = "No re
     await asyncio.sleep(2)
     await channel.delete()
 
-# --- TICKET (manual) ---
+# --- TICKET ---
 @bot.tree.command(name="ticket", description="🎫 Create a support ticket")
 @app_commands.default_permissions(manage_channels=True)
 @app_commands.describe(reason="Reason for the ticket")
@@ -1052,79 +1248,232 @@ async def clean_channel(interaction: discord.Interaction, amount: int = 1000):
         print(f"Unexpected error during clean: {e}")
 
 # --- FORWARD ---
-@bot.tree.command(name="forward", description="📤 Forward videos, photos, .txt from ANY channel")
+@bot.tree.command(name="forward", description="📤 Forward ALL files from ANY channel")
 @app_commands.default_permissions(administrator=True)
 @app_commands.describe(source_channel_id="ID of the channel to copy from", target_channel="Channel to send to", limit="Max files to copy (default 1000)")
 async def forward_files_cmd(interaction: discord.Interaction, source_channel_id: str, target_channel: discord.TextChannel, limit: int = 1000):
     await interaction.response.send_message(f"📤 **Forwarding files...**\nSource: `{source_channel_id}`\nTarget: #{target_channel.name}\nLimit: {limit}", ephemeral=True)
     try:
-        file_count, skipped_count = await forward_files_only(source_channel_id, target_channel, bot.user_token, limit)
-        await log_action(interaction.guild, "📤 FILES FORWARDED", interaction.user, f"Forwarded {file_count} files\nSkipped {skipped_count}\nTo: #{target_channel.name}")
-        await interaction.followup.send(f"✅ **Forward Complete!**\n📎 Forwarded: {file_count}\n🚫 Skipped: {skipped_count}\n📤 To: #{target_channel.name}", ephemeral=True)
+        file_count = await forward_files_only(source_channel_id, target_channel, bot.user_token, limit)
+        await log_action(interaction.guild, "📤 FILES FORWARDED", interaction.user, f"Forwarded {file_count} files\nTo: #{target_channel.name}")
+        await interaction.followup.send(f"✅ **Forward Complete!**\n📎 Forwarded: {file_count}\n📤 To: #{target_channel.name}", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:500]}", ephemeral=True)
 
-# --- CLONE ---
-@bot.tree.command(name="clone", description="📋 Clone server structure + roles")
+# --- CLONE (FIXED — clones roles + channels) ---
+@bot.tree.command(name="clone", description="📋 Clone server structure + roles (FIXED)")
 @app_commands.default_permissions(administrator=True)
 @app_commands.describe(source_id="Source server ID", target_id="Target server ID")
 async def clone_cmd(interaction: discord.Interaction, source_id: str, target_id: str):
-    await interaction.response.send_message("📋 Cloning...", ephemeral=True)
+    await interaction.response.send_message("📋 Cloning server structure and roles...", ephemeral=True)
     try:
         src_data, src_channels, src_roles = await fetch_guild_data(source_id, bot.user_token)
         target = bot.get_guild(int(target_id))
         if not target:
-            await interaction.followup.send("❌ Target not found", ephemeral=True)
+            await interaction.followup.send("❌ Target server not found! Make sure I'm in it.", ephemeral=True)
             return
         
-        # Delete existing channels
-        for ch in target.channels:
+        # Check permissions in target
+        if not target.me.guild_permissions.manage_channels or not target.me.guild_permissions.manage_roles:
+            await interaction.followup.send("❌ I need **Manage Channels** and **Manage Roles** permissions in the target server!", ephemeral=True)
+            return
+        
+        # 1. DELETE ALL EXISTING CHANNELS IN TARGET
+        await interaction.followup.send("🗑️ Clearing target server...", ephemeral=True)
+        for channel in target.channels:
             try:
-                await ch.delete()
+                await channel.delete()
+                await asyncio.sleep(0.2)
             except:
                 pass
         
-        # Clone roles
+        # 2. CLONE ROLES (FIXED)
+        await interaction.followup.send("📋 Cloning roles...", ephemeral=True)
         role_map = {}
         for role in src_roles:
-            if role['name'] != '@everyone':
-                try:
-                    new_role = await target.create_role(
-                        name=role['name'],
-                        permissions=discord.Permissions(role['permissions']),
-                        color=discord.Color(role['color']) if role['color'] else discord.Color.default(),
-                        hoist=role['hoist'],
-                        mentionable=role['mentionable']
-                    )
-                    role_map[role['id']] = new_role
-                    await asyncio.sleep(0.3)
-                except:
-                    pass
+            if role['name'] == '@everyone':
+                continue
+            try:
+                new_role = await target.create_role(
+                    name=role['name'],
+                    permissions=discord.Permissions(role['permissions']),
+                    color=discord.Color(role['color']) if role['color'] else discord.Color.default(),
+                    hoist=role['hoist'],
+                    mentionable=role['mentionable']
+                )
+                role_map[role['id']] = new_role
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                print(f"Failed to clone role {role['name']}: {e}")
         
-        # Clone categories
+        # 3. CLONE CATEGORIES
+        await interaction.followup.send("📂 Creating categories...", ephemeral=True)
         cat_map = {}
         for cat in [c for c in src_channels if c['type'] == 4]:
-            new = await target.create_category(cat['name'], position=cat.get('position', 0))
-            cat_map[cat['id']] = new
-            await asyncio.sleep(0.3)
+            try:
+                new_cat = await target.create_category(cat['name'], position=cat.get('position', 0))
+                cat_map[cat['id']] = new_cat
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                print(f"Failed to clone category: {e}")
         
-        # Clone text channels
+        # 4. CLONE TEXT CHANNELS
+        await interaction.followup.send("💬 Cloning text channels...", ephemeral=True)
         text_count = 0
         for ch in [c for c in src_channels if c['type'] == 0]:
-            parent = cat_map.get(ch.get('parent_id')) if ch.get('parent_id') else None
-            await target.create_text_channel(ch['name'], category=parent, position=ch.get('position', 0), topic=ch.get('topic', ''))
-            text_count += 1
-            await asyncio.sleep(0.3)
+            try:
+                parent = cat_map.get(ch.get('parent_id')) if ch.get('parent_id') else None
+                await target.create_text_channel(
+                    ch['name'],
+                    category=parent,
+                    position=ch.get('position', 0),
+                    topic=ch.get('topic', '')
+                )
+                text_count += 1
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                print(f"Failed to clone text channel: {e}")
         
-        # Clone voice channels
+        # 5. CLONE VOICE CHANNELS
+        await interaction.followup.send("🔊 Cloning voice channels...", ephemeral=True)
+        voice_count = 0
         for ch in [c for c in src_channels if c['type'] == 2]:
-            parent = cat_map.get(ch.get('parent_id')) if ch.get('parent_id') else None
-            await target.create_voice_channel(ch['name'], category=parent, position=ch.get('position', 0), bitrate=ch.get('bitrate', 64000))
-            await asyncio.sleep(0.3)
+            try:
+                parent = cat_map.get(ch.get('parent_id')) if ch.get('parent_id') else None
+                await target.create_voice_channel(
+                    ch['name'],
+                    category=parent,
+                    position=ch.get('position', 0),
+                    bitrate=ch.get('bitrate', 64000),
+                    user_limit=ch.get('user_limit', 0)
+                )
+                voice_count += 1
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                print(f"Failed to clone voice channel: {e}")
         
-        await interaction.followup.send(f"✅ Cloned {text_count} channels and {len(role_map)} roles", ephemeral=True)
+        # 6. CLONE FORUM CHANNELS
+        await interaction.followup.send("📝 Cloning forum channels...", ephemeral=True)
+        forum_count = 0
+        for ch in [c for c in src_channels if c['type'] == 15]:
+            try:
+                parent = cat_map.get(ch.get('parent_id')) if ch.get('parent_id') else None
+                await target.create_forum(
+                    ch['name'],
+                    category=parent,
+                    position=ch.get('position', 0),
+                    topic=ch.get('topic', '')
+                )
+                forum_count += 1
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                print(f"Failed to clone forum channel: {e}")
+        
+        # 7. CLONE STAGE CHANNELS
+        await interaction.followup.send("🎭 Cloning stage channels...", ephemeral=True)
+        stage_count = 0
+        for ch in [c for c in src_channels if c['type'] == 13]:
+            try:
+                parent = cat_map.get(ch.get('parent_id')) if ch.get('parent_id') else None
+                await target.create_stage_channel(
+                    ch['name'],
+                    category=parent,
+                    position=ch.get('position', 0),
+                    bitrate=ch.get('bitrate', 64000)
+                )
+                stage_count += 1
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                print(f"Failed to clone stage channel: {e}")
+        
+        await log_action(
+            interaction.guild,
+            "📋 CLONE COMPLETE",
+            interaction.user,
+            f"Source: {src_data.get('name', 'Unknown')}\n"
+            f"Target: {target.name}\n"
+            f"Roles: {len(role_map)}\n"
+            f"Categories: {len(cat_map)}\n"
+            f"Text: {text_count}\n"
+            f"Voice: {voice_count}\n"
+            f"Forum: {forum_count}\n"
+            f"Stage: {stage_count}"
+        )
+        
+        await interaction.followup.send(
+            f"✅ **Clone Complete!**\n"
+            f"📊 `{src_data.get('name', 'Unknown')}` → `{target.name}`\n"
+            f"📋 Roles cloned: {len(role_map)}\n"
+            f"📁 Categories: {len(cat_map)}\n"
+            f"💬 Text channels: {text_count}\n"
+            f"🔊 Voice channels: {voice_count}\n"
+            f"📝 Forum channels: {forum_count}\n"
+            f"🎭 Stage channels: {stage_count}\n"
+            f"⚫ Kers0ne delivers.",
+            ephemeral=True
+        )
+    
     except Exception as e:
-        await interaction.followup.send(f"❌ Error: {str(e)[:200]}", ephemeral=True)
+        await interaction.followup.send(f"❌ Error: {str(e)[:600]}", ephemeral=True)
+
+# --- LOCKDOWN ---
+@bot.tree.command(name="lockdown", description="🔒 Lock server")
+@app_commands.default_permissions(administrator=True)
+async def lockdown_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    for ch in interaction.guild.channels:
+        if isinstance(ch, discord.TextChannel):
+            await ch.set_permissions(interaction.guild.default_role, send_messages=False)
+    await log_action(interaction.guild, "🔒 LOCKDOWN", interaction.user, "Server locked")
+    await interaction.followup.send("🔒 Server locked", ephemeral=True)
+
+# --- UNLOCK SERVER ---
+@bot.tree.command(name="unlockserver", description="🔓 Unlock server")
+@app_commands.default_permissions(administrator=True)
+async def unlockserver_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    for ch in interaction.guild.channels:
+        if isinstance(ch, discord.TextChannel):
+            await ch.set_permissions(interaction.guild.default_role, send_messages=None)
+    await log_action(interaction.guild, "🔓 UNLOCKED", interaction.user, "Server unlocked")
+    await interaction.followup.send("🔓 Server unlocked", ephemeral=True)
+
+# --- DELETE ALL CHANNELS ---
+@bot.tree.command(name="deleteallchannels", description="💀 DELETE ALL channels")
+@app_commands.default_permissions(administrator=True)
+async def deleteall_cmd(interaction: discord.Interaction):
+    view = DeleteAllConfirmView(interaction.guild, interaction.user)
+    await interaction.response.send_message("💀 Delete ALL channels?", view=view, ephemeral=True)
+
+# --- REMOVE ROLES ---
+@bot.tree.command(name="removeroles", description="⚔️ Remove all roles")
+@app_commands.default_permissions(manage_roles=True)
+@app_commands.describe(user="The user to strip roles from", reason="Reason")
+async def removeroles_cmd(interaction: discord.Interaction, user: discord.Member, reason: str = "No reason"):
+    view = ConfirmView(user, interaction.guild, "remove_roles", reason)
+    await interaction.response.send_message(f"⚠️ Remove roles from {user.mention}?", view=view, ephemeral=True)
+
+# --- SETUP ---
+@bot.tree.command(name="setup", description="🔧 Setup logs channel")
+@app_commands.default_permissions(administrator=True)
+async def setup_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    await setup_logs_channel(interaction.guild)
+    await interaction.followup.send("✅ Logs channel created", ephemeral=True)
+
+# --- STATS ---
+@bot.tree.command(name="stats", description="📊 Server stats")
+@app_commands.default_permissions(administrator=True)
+async def stats_cmd(interaction: discord.Interaction):
+    guild = interaction.guild
+    embed = discord.Embed(title=f"📊 Server Stats - {guild.name}", color=discord.Color.dark_gray())
+    embed.add_field(name="👥 Members", value=guild.member_count, inline=True)
+    embed.add_field(name="💬 Channels", value=len(guild.channels), inline=True)
+    embed.add_field(name="📁 Categories", value=len(guild.categories), inline=True)
+    embed.add_field(name="🔊 Voice", value=len(guild.voice_channels), inline=True)
+    embed.add_field(name="📝 Text", value=len(guild.text_channels), inline=True)
+    embed.add_field(name="👑 Owner", value=guild.owner.mention, inline=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # --- BAN ---
 @bot.tree.command(name="ban", description="🔨 Ban a user")
@@ -1229,99 +1578,6 @@ async def deletefiles_cmd(interaction: discord.Interaction, channel: discord.Tex
     target = channel or interaction.channel
     view = DeleteFilesConfirmView(target, interaction.guild, interaction.user, limit)
     await interaction.response.send_message(f"⚠️ Delete files in #{target.name}?", view=view, ephemeral=True)
-
-# --- DELETE ALL CHANNELS ---
-@bot.tree.command(name="deleteallchannels", description="💀 DELETE ALL channels")
-@app_commands.default_permissions(administrator=True)
-async def deleteall_cmd(interaction: discord.Interaction):
-    view = DeleteAllConfirmView(interaction.guild, interaction.user)
-    await interaction.response.send_message("💀 Delete ALL channels?", view=view, ephemeral=True)
-
-# --- LOCKDOWN ---
-@bot.tree.command(name="lockdown", description="🔒 Lock server")
-@app_commands.default_permissions(administrator=True)
-async def lockdown_cmd(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    for ch in interaction.guild.channels:
-        if isinstance(ch, discord.TextChannel):
-            await ch.set_permissions(interaction.guild.default_role, send_messages=False)
-    await log_action(interaction.guild, "🔒 LOCKDOWN", interaction.user, "Server locked")
-    await interaction.followup.send("🔒 Server locked", ephemeral=True)
-
-# --- UNLOCK SERVER ---
-@bot.tree.command(name="unlockserver", description="🔓 Unlock server")
-@app_commands.default_permissions(administrator=True)
-async def unlockserver_cmd(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    for ch in interaction.guild.channels:
-        if isinstance(ch, discord.TextChannel):
-            await ch.set_permissions(interaction.guild.default_role, send_messages=None)
-    await log_action(interaction.guild, "🔓 UNLOCKED", interaction.user, "Server unlocked")
-    await interaction.followup.send("🔓 Server unlocked", ephemeral=True)
-
-# --- LOCK ALL ---
-@bot.tree.command(name="lockall", description="🔒 Lock ALL channels")
-@app_commands.default_permissions(administrator=True)
-async def lockall_cmd(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    count = 0
-    for ch in interaction.guild.channels:
-        try:
-            if isinstance(ch, (discord.TextChannel, discord.VoiceChannel, discord.ForumChannel, discord.StageChannel)):
-                await ch.set_permissions(interaction.guild.default_role, send_messages=False, connect=False, speak=False)
-                count += 1
-                await asyncio.sleep(0.2)
-        except:
-            pass
-    await log_action(interaction.guild, "🔒 LOCKALL", interaction.user, f"Locked {count} channels")
-    await interaction.followup.send(f"🔒 Locked {count} channels", ephemeral=True)
-
-# --- UNLOCK ALL ---
-@bot.tree.command(name="unlockall", description="🔓 Unlock ALL channels")
-@app_commands.default_permissions(administrator=True)
-async def unlockall_cmd(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    count = 0
-    for ch in interaction.guild.channels:
-        try:
-            if isinstance(ch, (discord.TextChannel, discord.VoiceChannel, discord.ForumChannel, discord.StageChannel)):
-                await ch.set_permissions(interaction.guild.default_role, send_messages=None, connect=None, speak=None)
-                count += 1
-                await asyncio.sleep(0.2)
-        except:
-            pass
-    await log_action(interaction.guild, "🔓 UNLOCKALL", interaction.user, f"Unlocked {count} channels")
-    await interaction.followup.send(f"🔓 Unlocked {count} channels", ephemeral=True)
-
-# --- REMOVE ROLES ---
-@bot.tree.command(name="removeroles", description="⚔️ Remove all roles")
-@app_commands.default_permissions(manage_roles=True)
-@app_commands.describe(user="The user to strip roles from", reason="Reason")
-async def removeroles_cmd(interaction: discord.Interaction, user: discord.Member, reason: str = "No reason"):
-    view = ConfirmView(user, interaction.guild, "remove_roles", reason)
-    await interaction.response.send_message(f"⚠️ Remove roles from {user.mention}?", view=view, ephemeral=True)
-
-# --- SETUP ---
-@bot.tree.command(name="setup", description="🔧 Setup logs channel")
-@app_commands.default_permissions(administrator=True)
-async def setup_cmd(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    await setup_logs_channel(interaction.guild)
-    await interaction.followup.send("✅ Logs channel created", ephemeral=True)
-
-# --- STATS ---
-@bot.tree.command(name="stats", description="📊 Server stats")
-@app_commands.default_permissions(administrator=True)
-async def stats_cmd(interaction: discord.Interaction):
-    guild = interaction.guild
-    embed = discord.Embed(title=f"📊 Server Stats - {guild.name}", color=discord.Color.dark_gray())
-    embed.add_field(name="👥 Members", value=guild.member_count, inline=True)
-    embed.add_field(name="💬 Channels", value=len(guild.channels), inline=True)
-    embed.add_field(name="📁 Categories", value=len(guild.categories), inline=True)
-    embed.add_field(name="🔊 Voice", value=len(guild.voice_channels), inline=True)
-    embed.add_field(name="📝 Text", value=len(guild.text_channels), inline=True)
-    embed.add_field(name="👑 Owner", value=guild.owner.mention, inline=True)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # --- CONTEXT MENUS ---
 @bot.tree.context_menu(name="🔨 Ban User")

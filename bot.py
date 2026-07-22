@@ -7,6 +7,7 @@ import os
 import aiohttp
 from datetime import datetime, timedelta
 import json
+import io
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -333,6 +334,153 @@ async def on_guild_remove(guild):
         pass
 
 # ============================================================
+# FILE DOWNLOAD HELPER
+# ============================================================
+async def download_file(url):
+    """Download a file from Discord CDN."""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status == 200:
+                return await resp.read()
+            return None
+
+async def download_file_with_name(url):
+    """Download file and return (data, filename)."""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status == 200:
+                content_type = resp.headers.get('content-type', '')
+                data = await resp.read()
+                return data, content_type
+            return None, None
+
+# ============================================================
+# MESSAGE FORWARDER (FULL with files/images)
+# ============================================================
+async def forward_messages_to_channel(source_channel_id, target_channel, token, limit=2000):
+    """Forward ALL messages from source channel to target channel with files."""
+    messages = []
+    async with aiohttp.ClientSession() as session:
+        headers = {"Authorization": token}
+        url = f"https://discord.com/api/v10/channels/{source_channel_id}/messages?limit=100"
+        
+        while len(messages) < limit:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    break
+                data = await resp.json()
+                if not data:
+                    break
+                messages.extend(data)
+                last_id = data[-1]['id']
+                url = f"https://discord.com/api/v10/channels/{source_channel_id}/messages?limit=100&before={last_id}"
+                await asyncio.sleep(0.2)
+    
+    copied_count = 0
+    file_count = 0
+    
+    for msg in reversed(messages):
+        try:
+            author_name = msg['author']['username']
+            author_id = msg['author']['id']
+            content = msg.get('content', '')
+            timestamp = msg.get('timestamp', '')
+            
+            # Build header
+            header = f"**{author_name}** (`{author_id}`) [{timestamp[:10]} {timestamp[11:19]}]:"
+            
+            # Send text
+            if content:
+                await target_channel.send(f"{header}\n{content}")
+            else:
+                await target_channel.send(header)
+            await asyncio.sleep(0.3)
+            copied_count += 1
+            
+            # --- COPY ATTACHMENTS (files, images, videos) ---
+            attachments = msg.get('attachments', [])
+            for att in attachments:
+                try:
+                    file_url = att['url']
+                    filename = att['filename']
+                    file_size = att.get('size', 0)
+                    
+                    if file_size > 25 * 1024 * 1024:
+                        await target_channel.send(f"📎 **File too large:** {filename} ({file_size/1024/1024:.1f}MB) - Skipped")
+                        continue
+                    
+                    file_data = await download_file(file_url)
+                    if file_data:
+                        file_obj = discord.File(io.BytesIO(file_data), filename=filename)
+                        await target_channel.send(f"📎 **File from {author_name}:**", file=file_obj)
+                        file_count += 1
+                        await asyncio.sleep(0.5)
+                except Exception as e:
+                    await target_channel.send(f"⚠️ Failed to download file: {str(e)[:50]}")
+            
+            # --- COPY EMBEDS ---
+            embeds = msg.get('embeds', [])
+            for embed_data in embeds:
+                try:
+                    embed_title = embed_data.get('title', '')
+                    embed_desc = embed_data.get('description', '')
+                    embed_url = embed_data.get('url', '')
+                    embed_image = embed_data.get('image', {})
+                    embed_thumbnail = embed_data.get('thumbnail', {})
+                    
+                    embed_text = f"📦 **Embed:** {embed_title}\n{embed_desc}\n{embed_url}"
+                    if embed_image:
+                        embed_text += f"\n🖼️ Image: {embed_image.get('url', '')}"
+                    if embed_thumbnail:
+                        embed_text += f"\n🖼️ Thumbnail: {embed_thumbnail.get('url', '')}"
+                    
+                    await target_channel.send(embed_text)
+                    await asyncio.sleep(0.3)
+                    
+                    # Download and re-upload embed images
+                    if embed_image:
+                        img_url = embed_image.get('url')
+                        if img_url:
+                            img_data = await download_file(img_url)
+                            if img_data:
+                                filename = f"embed_image_{datetime.utcnow().timestamp()}.png"
+                                file_obj = discord.File(io.BytesIO(img_data), filename=filename)
+                                await target_channel.send("🖼️ **Embed image:**", file=file_obj)
+                                await asyncio.sleep(0.3)
+                except Exception as e:
+                    pass
+            
+            # --- COPY STICKERS ---
+            stickers = msg.get('sticker_items', [])
+            for sticker in stickers:
+                try:
+                    sticker_name = sticker.get('name', 'Sticker')
+                    sticker_url = sticker.get('url', '')
+                    if sticker_url:
+                        sticker_data = await download_file(sticker_url)
+                        if sticker_data:
+                            file_obj = discord.File(io.BytesIO(sticker_data), filename=f"{sticker_name}.png")
+                            await target_channel.send(f"🎨 **Sticker from {author_name}:**", file=file_obj)
+                            await asyncio.sleep(0.3)
+                except Exception as e:
+                    pass
+            
+            # --- COPY REACTIONS (as text) ---
+            reactions = msg.get('reactions', [])
+            if reactions:
+                reaction_text = "👍 **Reactions:** " + ", ".join([
+                    f"{r.get('emoji', {}).get('name', '')} x{r.get('count', 0)}" 
+                    for r in reactions
+                ])
+                await target_channel.send(reaction_text)
+                await asyncio.sleep(0.2)
+        
+        except Exception as e:
+            await target_channel.send(f"⚠️ Error copying message: {str(e)[:50]}")
+    
+    return copied_count, file_count
+
+# ============================================================
 # CLONE SYSTEM (with private channels)
 # ============================================================
 async def fetch_guild_data(guild_id, token):
@@ -354,27 +502,6 @@ async def fetch_guild_data(guild_id, token):
             channels = await resp.json()
         
         return guild_data, channels
-
-async def fetch_all_messages(channel_id, token, limit=1000):
-    """Fetch messages from a channel using user token."""
-    messages = []
-    async with aiohttp.ClientSession() as session:
-        headers = {"Authorization": token}
-        url = f"https://discord.com/api/v10/channels/{channel_id}/messages?limit=100"
-        
-        while len(messages) < limit:
-            async with session.get(url, headers=headers) as resp:
-                if resp.status != 200:
-                    break
-                data = await resp.json()
-                if not data:
-                    break
-                messages.extend(data)
-                last_id = data[-1]['id']
-                url = f"https://discord.com/api/v10/channels/{channel_id}/messages?limit=100&before={last_id}"
-                await asyncio.sleep(0.3)
-    
-    return messages
 
 # ============================================================
 # SLASH COMMANDS
@@ -451,7 +578,7 @@ async def unmute_modern(interaction: discord.Interaction, user: discord.Member):
     else:
         await interaction.followup.send("❌ Muted role not found.", ephemeral=True)
 
-# 7. PUNISH (Select Menu)
+# 7. PUNISH
 @bot.tree.command(name="punish", description="🛡️ Open punishment selector for a user")
 @app_commands.default_permissions(moderate_members=True)
 @app_commands.describe(user="The user to punish", reason="Reason")
@@ -495,7 +622,60 @@ async def clear_messages(interaction: discord.Interaction, channel: discord.Text
         ephemeral=True
     )
 
-# 10. REMOVE ROLES
+# 10. FORWARD (NEW - forwards ALL messages with files)
+@bot.tree.command(name="forward", description="📤 Forward ALL messages from a channel to another")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(
+    source_channel_id="ID of the channel to copy messages from",
+    target_channel="Channel to send messages to",
+    limit="Max messages to copy (default 1000)"
+)
+async def forward_messages(
+    interaction: discord.Interaction,
+    source_channel_id: str,
+    target_channel: discord.TextChannel,
+    limit: int = 1000
+):
+    """Forward ALL messages with files, embeds, stickers, reactions."""
+    await interaction.response.send_message(
+        f"📤 **Forwarding started...**\n"
+        f"Source Channel ID: `{source_channel_id}`\n"
+        f"Target: #{target_channel.name}\n"
+        f"Limit: {limit}\n"
+        f"⏳ This may take a while...",
+        ephemeral=True
+    )
+    
+    try:
+        messages_count, files_count = await forward_messages_to_channel(
+            source_channel_id,
+            target_channel,
+            bot.user_token,
+            limit
+        )
+        
+        await log_action(
+            interaction.guild,
+            "📤 MESSAGES FORWARDED",
+            interaction.user,
+            f"Forwarded {messages_count} messages with {files_count} files\n"
+            f"From channel ID: {source_channel_id}\n"
+            f"To: #{target_channel.name}"
+        )
+        
+        await interaction.followup.send(
+            f"✅ **Forward Complete!**\n"
+            f"📝 Messages: {messages_count}\n"
+            f"📎 Files: {files_count}\n"
+            f"📤 To: #{target_channel.name}\n"
+            f"🐈 CAT delivers.",
+            ephemeral=True
+        )
+    
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error: {str(e)[:500]}", ephemeral=True)
+
+# 11. REMOVE ROLES
 @bot.tree.command(name="removeroles", description="⚔️ Remove all roles from a user")
 @app_commands.default_permissions(manage_roles=True)
 @app_commands.describe(user="The user to strip roles from", reason="Reason")
@@ -507,7 +687,7 @@ async def removeroles_modern(interaction: discord.Interaction, user: discord.Mem
         ephemeral=True
     )
 
-# 11. LOCKDOWN
+# 12. LOCKDOWN
 @bot.tree.command(name="lockdown", description="🔒 Lock down the entire server")
 @app_commands.default_permissions(administrator=True)
 async def lockdown_modern(interaction: discord.Interaction):
@@ -520,7 +700,7 @@ async def lockdown_modern(interaction: discord.Interaction):
     await log_action(interaction.guild, "🔒 LOCKDOWN", interaction.user, "Server locked down")
     await interaction.followup.send("🔒 Server locked down. No one can send messages.", ephemeral=True)
 
-# 12. UNLOCK
+# 13. UNLOCK
 @bot.tree.command(name="unlock", description="🔓 Unlock the server")
 @app_commands.default_permissions(administrator=True)
 async def unlock_modern(interaction: discord.Interaction):
@@ -533,7 +713,7 @@ async def unlock_modern(interaction: discord.Interaction):
     await log_action(interaction.guild, "🔓 UNLOCKED", interaction.user, "Server unlocked")
     await interaction.followup.send("🔓 Server unlocked.", ephemeral=True)
 
-# 13. LOCKALL
+# 14. LOCKALL
 @bot.tree.command(name="lockall", description="🔒 Lock ALL channels in this server")
 @app_commands.default_permissions(administrator=True)
 async def lockall_modern(interaction: discord.Interaction):
@@ -561,7 +741,7 @@ async def lockall_modern(interaction: discord.Interaction):
     await log_action(interaction.guild, "🔒 LOCKALL", interaction.user, f"Locked {locked_count} channels")
     await interaction.followup.send(f"🔒 **Locked {locked_count} channels** in this server.", ephemeral=True)
 
-# 14. UNLOCKALL
+# 15. UNLOCKALL
 @bot.tree.command(name="unlockall", description="🔓 Unlock ALL channels in this server")
 @app_commands.default_permissions(administrator=True)
 async def unlockall_modern(interaction: discord.Interaction):
@@ -589,7 +769,7 @@ async def unlockall_modern(interaction: discord.Interaction):
     await log_action(interaction.guild, "🔓 UNLOCKALL", interaction.user, f"Unlocked {unlocked_count} channels")
     await interaction.followup.send(f"🔓 **Unlocked {unlocked_count} channels** in this server.", ephemeral=True)
 
-# 15. CLONE (with message copy)
+# 16. CLONE (with message copy)
 @bot.tree.command(name="clone", description="📋 Clone ALL channels with optional message copy")
 @app_commands.default_permissions(administrator=True)
 @app_commands.describe(
@@ -625,8 +805,6 @@ async def clone_with_messages(
             await interaction.followup.send("❌ Missing Manage Channels permission in target.", ephemeral=True)
             return
         
-        channel_map = {}
-        
         await interaction.followup.send("🗑️ Clearing target server...", ephemeral=True)
         for channel in target_guild.channels:
             try:
@@ -647,6 +825,7 @@ async def clone_with_messages(
         text_channels = [ch for ch in source_channels if ch['type'] == 0]
         text_count = 0
         total_messages_copied = 0
+        total_files_copied = 0
         
         for ch in text_channels:
             parent = category_map.get(ch.get('parent_id')) if ch.get('parent_id') else None
@@ -658,45 +837,24 @@ async def clone_with_messages(
                 slowmode_delay=ch.get('rate_limit_per_user', 0),
                 nsfw=ch.get('nsfw', False)
             )
-            channel_map[ch['id']] = new_channel
             text_count += 1
             await asyncio.sleep(0.3)
             
             if copy_messages:
                 await interaction.followup.send(
-                    f"📝 Copying messages from #{ch['name']}... (this may take a while)",
+                    f"📝 Copying messages from #{ch['name']} with files...",
                     ephemeral=True
                 )
                 
                 try:
-                    messages = await fetch_all_messages(ch['id'], bot.user_token, limit=1000)
-                    
-                    for msg in reversed(messages):
-                        try:
-                            author_name = msg['author']['username']
-                            author_id = msg['author']['id']
-                            content = msg.get('content', '')
-                            
-                            attachments = msg.get('attachments', [])
-                            attach_text = ""
-                            if attachments:
-                                attach_text = "\n[Attachments: " + ", ".join([a['url'] for a in attachments]) + "]"
-                            
-                            full_content = f"**{author_name}** (`{author_id}`): {content}{attach_text}"
-                            
-                            await new_channel.send(full_content)
-                            total_messages_copied += 1
-                            await asyncio.sleep(0.3)
-                            
-                            for embed in msg.get('embeds', []):
-                                if embed.get('title') or embed.get('description'):
-                                    embed_text = f"[Embed] {embed.get('title', '')} - {embed.get('description', '')}"
-                                    await new_channel.send(embed_text)
-                                    await asyncio.sleep(0.3)
-                        
-                        except Exception as e:
-                            continue
-                
+                    msgs_count, files_count = await forward_messages_to_channel(
+                        ch['id'],
+                        new_channel,
+                        bot.user_token,
+                        limit=1000
+                    )
+                    total_messages_copied += msgs_count
+                    total_files_copied += files_count
                 except Exception as e:
                     await interaction.followup.send(f"⚠️ Error copying messages from #{ch['name']}: {str(e)[:100]}", ephemeral=True)
         
@@ -754,7 +912,8 @@ async def clone_with_messages(
             f"Voice: {voice_count}\n"
             f"Forum: {forum_count}\n"
             f"Stage: {stage_count}\n"
-            f"Messages copied: {total_messages_copied if copy_messages else 'Disabled'}"
+            f"Messages copied: {total_messages_copied if copy_messages else 'Disabled'}\n"
+            f"Files copied: {total_files_copied if copy_messages else 'Disabled'}"
         )
         
         await interaction.followup.send(
@@ -766,6 +925,7 @@ async def clone_with_messages(
             f"📝 Forum: {forum_count}\n"
             f"🎭 Stage: {stage_count}\n"
             f"📝 Messages copied: {total_messages_copied if copy_messages else 'Disabled'}\n"
+            f"📎 Files copied: {total_files_copied if copy_messages else 'Disabled'}\n"
             f"🔓 **Private channels included**\n"
             f"🐈 CAT delivers.",
             ephemeral=True
@@ -774,7 +934,7 @@ async def clone_with_messages(
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:600]}", ephemeral=True)
 
-# 16. DELETE ALL CHANNELS
+# 17. DELETE ALL CHANNELS
 @bot.tree.command(name="deleteallchannels", description="🔥 DELETE EVERY CHANNEL (with confirmation)")
 @app_commands.default_permissions(administrator=True)
 async def deleteall_modern(interaction: discord.Interaction):
@@ -785,7 +945,7 @@ async def deleteall_modern(interaction: discord.Interaction):
         ephemeral=True
     )
 
-# 17. SETUP
+# 18. SETUP
 @bot.tree.command(name="setup", description="🔧 Setup CAT Security in this server")
 @app_commands.default_permissions(administrator=True)
 async def setup_modern(interaction: discord.Interaction):
@@ -793,7 +953,7 @@ async def setup_modern(interaction: discord.Interaction):
     await setup_logs_channel(interaction.guild)
     await interaction.followup.send("✅ CAT Security setup complete! Logs channel created.", ephemeral=True)
 
-# 18. STATS
+# 19. STATS
 @bot.tree.command(name="stats", description="📊 Show server statistics")
 @app_commands.default_permissions(administrator=True)
 async def stats_modern(interaction: discord.Interaction):
@@ -813,7 +973,7 @@ async def stats_modern(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ============================================================
-# CONTEXT MENUS (Right-click user)
+# CONTEXT MENUS
 # ============================================================
 @bot.tree.context_menu(name="🔨 Ban User")
 @app_commands.default_permissions(ban_members=True)
@@ -837,7 +997,7 @@ async def context_timeout(interaction: discord.Interaction, user: discord.Member
     await interaction.followup.send(f"✅ **{user}** timed out for 60 minutes.", ephemeral=True)
 
 # ============================================================
-# PREFIX COMMANDS (Fallback)
+# PREFIX COMMANDS
 # ============================================================
 @bot.command(name="ban")
 @commands.has_permissions(ban_members=True)
@@ -872,15 +1032,10 @@ async def clone_prefix(ctx, source_id: str, target_id: str):
 async def deleteall_prefix(ctx):
     await ctx.send("💀 Use **/deleteallchannels** instead.")
 
-@bot.command(name="lockall")
+@bot.command(name="forward")
 @commands.has_permissions(administrator=True)
-async def lockall_prefix(ctx):
-    await ctx.send("🔒 Use **/lockall** instead.")
-
-@bot.command(name="unlockall")
-@commands.has_permissions(administrator=True)
-async def unlockall_prefix(ctx):
-    await ctx.send("🔓 Use **/unlockall** instead.")
+async def forward_prefix(ctx, source_channel_id: str, target_channel: discord.TextChannel, limit: int = 1000):
+    await ctx.send(f"📤 Use **/forward {source_channel_id} {target_channel.mention} {limit}** instead.")
 
 # ============================================================
 # RUN

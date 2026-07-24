@@ -1,5 +1,8 @@
 # ============================================================
-# KERS0NE BOT — COMPLETE WITH WEBSITE
+# KERS0NE BOT — COMPLETE DISCORD BOT
+# ALL COMMANDS: Moderation, Cleanup, Lock, Tickets, Webhooks,
+# Embeds, Utility, Forward, Forward2, Scan Server, Dump Server,
+# Clone, Auto-Protection, Admin Giver, Ultra-Fast Webhook Spam
 # ============================================================
 
 import os
@@ -10,7 +13,10 @@ import re
 import time
 import zipfile
 import threading
-from urllib.parse import urljoin, urlparse
+import json
+import hashlib
+import mimetypes
+from urllib.parse import urljoin, urlparse, parse_qs
 from datetime import datetime, timedelta
 from flask import Flask, render_template_string, request, jsonify, session
 
@@ -29,7 +35,8 @@ COMMANDS_LIST = [
     {"category": "🛡️ Moderation", "commands": ["/ban", "/kick", "/timeout", "/untimeout", "/mute", "/unmute", "/punish", "/removeroles", "/nick", "/slowmode", "/warn", "/warnings", "/clearwarnings"]},
     {"category": "🔒 Channel Lock", "commands": ["/lock", "/unlock", "/lockall", "/unlockall"]},
     {"category": "🧹 Cleanup", "commands": ["/purge", "/clear", "/deletetext", "/deletefiles"]},
-    {"category": "📤 Forward", "commands": ["/forward", "/forward2", "/forward3"]},
+    {"category": "📤 Forward", "commands": ["/forward", "/forward2"]},
+    {"category": "🔍 Scan", "commands": ["/scan-server", "/dump-server"]},
     {"category": "🔒 Server Control", "commands": ["/lockdown", "/unlockserver", "/deleteallchannels"]},
     {"category": "🎫 Tickets", "commands": ["/ticket", "/ticketsetup", "/closeticket"]},
     {"category": "🌐 Webhooks", "commands": ["/create-webhook", "/spam-webhook", "/delete-webhook", "/spam-multi"]},
@@ -313,136 +320,6 @@ async def fetch_guild_data(guild_id, token):
         return guild, channels, roles
 
 # ============================================================
-# WEBSITE DOWNLOADER FOR FORWARD3
-# ============================================================
-def fix_url(match, base_url, current_url):
-    attr = match.group(1)
-    url_value = match.group(2)
-    if url_value.startswith('http') or url_value.startswith('//'):
-        return f'{attr}="{url_value}"'
-    full_url = urljoin(current_url, url_value)
-    return f'{attr}="{full_url}"'
-
-def fix_css_url(match, base_url, current_url):
-    url_value = match.group(1)
-    if url_value.startswith('http') or url_value.startswith('//'):
-        return f'url("{url_value}")'
-    full_url = urljoin(current_url, url_value)
-    return f'url("{full_url}")'
-
-async def download_website_real(base_url, max_pages=50):
-    visited = set()
-    to_visit = [base_url]
-    files = {}
-    file_count = 0
-    page_count = 0
-    
-    if not base_url.startswith(('http://', 'https://')):
-        base_url = 'https://' + base_url
-    
-    async with aiohttp.ClientSession() as session:
-        while to_visit and page_count < max_pages:
-            current_url = to_visit.pop(0)
-            if current_url in visited:
-                continue
-            visited.add(current_url)
-            
-            try:
-                async with session.get(current_url, timeout=15, headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }) as resp:
-                    if resp.status != 200:
-                        continue
-                    
-                    content = await resp.read()
-                    content_type = resp.headers.get('content-type', '').lower()
-                    parsed = urlparse(current_url)
-                    path = parsed.path or '/index.html'
-                    
-                    if 'text/html' in content_type:
-                        page_count += 1
-                        try:
-                            html = content.decode('utf-8', errors='ignore')
-                            html = re.sub(r'(href|src)=["\']/([^"\']+)["\']', f'\\1="{base_url}/\\2"', html)
-                            html = re.sub(r'(href|src)=["\']([^"\']+)["\']', lambda m: fix_url(m, base_url, current_url), html)
-                            
-                            link_pattern = r'(?:href|src)=["\']([^"\']+)["\']'
-                            for match in re.finditer(link_pattern, html):
-                                link = match.group(1)
-                                if link.startswith('#') or link.startswith('javascript:') or link.startswith('mailto:') or link.startswith('tel:'):
-                                    continue
-                                full_url = urljoin(current_url, link)
-                                if full_url.startswith(base_url) and full_url not in visited:
-                                    to_visit.append(full_url)
-                            
-                            if path.endswith('/') or not path.split('/')[-1].count('.'):
-                                path += 'index.html'
-                            elif not any(path.endswith(ext) for ext in ['.html', '.htm']):
-                                path += '.html'
-                            
-                            files[path] = html.encode('utf-8')
-                            file_count += 1
-                        except:
-                            files[path] = content
-                            file_count += 1
-                    
-                    elif 'text/css' in content_type:
-                        try:
-                            css = content.decode('utf-8', errors='ignore')
-                            css = re.sub(r'url\(["\']?([^"\'\)]+)["\']?\)', lambda m: fix_css_url(m, base_url, current_url), css)
-                            files[path if path.endswith('.css') else path + '.css'] = css.encode('utf-8')
-                            file_count += 1
-                        except:
-                            files[path if path.endswith('.css') else path + '.css'] = content
-                            file_count += 1
-                    
-                    elif 'javascript' in content_type or 'ecmascript' in content_type:
-                        try:
-                            js = content.decode('utf-8', errors='ignore')
-                            files[path if path.endswith('.js') else path + '.js'] = js.encode('utf-8')
-                            file_count += 1
-                        except:
-                            files[path if path.endswith('.js') else path + '.js'] = content
-                            file_count += 1
-                    
-                    elif 'image/' in content_type:
-                        ext = content_type.split('/')[-1].split(';')[0]
-                        if ext in ['jpeg', 'png', 'gif', 'webp', 'svg+xml', 'bmp', 'ico']:
-                            if ext == 'svg+xml':
-                                ext = 'svg'
-                            elif ext == 'jpeg':
-                                ext = 'jpg'
-                            filename = path.split('/')[-1]
-                            if not filename or '.' not in filename:
-                                filename = f"image_{file_count}.{ext}"
-                            files[filename] = content
-                            file_count += 1
-                    else:
-                        filename = path.split('/')[-1] or f"file_{file_count}"
-                        files[filename] = content
-                        file_count += 1
-                    
-                    await asyncio.sleep(0.1)
-                    
-            except Exception as e:
-                print(f"Error downloading {current_url}: {e}")
-                continue
-    
-    if not files:
-        return None, 0, 0
-    
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for path, content in files.items():
-            clean_path = path.lstrip('/')
-            if not clean_path:
-                clean_path = 'index.html'
-            zip_file.writestr(clean_path, content)
-    
-    zip_buffer.seek(0)
-    return zip_buffer.getvalue(), file_count, page_count
-
-# ============================================================
 # UI COMPONENTS
 # ============================================================
 class ConfirmView(View):
@@ -560,6 +437,70 @@ class ClearConfirmView(View):
         self.confirmed = False
         self.stop()
 
+class DeleteTextConfirmView(View):
+    def __init__(self, channel, guild, user, limit, timeout=60):
+        super().__init__(timeout=timeout)
+        self.channel = channel
+        self.guild = guild
+        self.user = user
+        self.limit = limit
+        self.confirmed = False
+
+    @discord.ui.button(label="🗑️ DELETE TEXT ONLY", style=ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(ephemeral=True)
+        self.confirmed = True
+        self.stop()
+        deleted = 0
+        kept = 0
+        async for msg in self.channel.history(limit=self.limit):
+            if len(msg.attachments) == 0:
+                await msg.delete()
+                deleted += 1
+                await asyncio.sleep(0.2)
+            else:
+                kept += 1
+        await log_action(self.guild, "🗑️ TEXT DELETED", self.user, f"Deleted {deleted}, kept {kept} files")
+        await interaction.followup.send(f"✅ Deleted {deleted} text, kept {kept} files", ephemeral=True)
+
+    @discord.ui.button(label="❌ Cancel", style=ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_message("❌ Cancelled.", ephemeral=True)
+        self.confirmed = False
+        self.stop()
+
+class DeleteFilesConfirmView(View):
+    def __init__(self, channel, guild, user, limit, timeout=60):
+        super().__init__(timeout=timeout)
+        self.channel = channel
+        self.guild = guild
+        self.user = user
+        self.limit = limit
+        self.confirmed = False
+
+    @discord.ui.button(label="🗑️ DELETE FILES ONLY", style=ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(ephemeral=True)
+        self.confirmed = True
+        self.stop()
+        deleted = 0
+        kept = 0
+        async for msg in self.channel.history(limit=self.limit):
+            if len(msg.attachments) > 0:
+                await msg.delete()
+                deleted += 1
+                await asyncio.sleep(0.2)
+            else:
+                kept += 1
+        await log_action(self.guild, "🗑️ FILES DELETED", self.user, f"Deleted {deleted} files, kept {kept} text")
+        await interaction.followup.send(f"✅ Deleted {deleted} files, kept {kept} text", ephemeral=True)
+
+    @discord.ui.button(label="❌ Cancel", style=ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_message("❌ Cancelled.", ephemeral=True)
+        self.confirmed = False
+        self.stop()
+
 class EmbedModal(Modal, title="Create Embed"):
     title_input = TextInput(label="Title", placeholder="Enter embed title...", required=False)
     description_input = TextInput(label="Description", placeholder="Enter embed description...", style=discord.TextStyle.paragraph, required=False)
@@ -598,12 +539,12 @@ class TicketButtonView(View):
         ticket_category = discord.utils.get(interaction.guild.categories, name="TICKETS")
         if not ticket_category:
             ticket_category = await interaction.guild.create_category("TICKETS")
-        
+
         for ch in ticket_category.channels:
             if ch.name.startswith(f"ticket-{interaction.user.name.lower()}"):
                 await interaction.response.send_message("❌ You already have an open ticket!", ephemeral=True)
                 return
-        
+
         ticket_name = f"ticket-{interaction.user.name.lower()}"
         overwrites = {
             interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
@@ -613,7 +554,7 @@ class TicketButtonView(View):
         admin_role = discord.utils.get(interaction.guild.roles, name="Admin")
         if admin_role:
             overwrites[admin_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-        
+
         ticket_channel = await ticket_category.create_text_channel(ticket_name, overwrites=overwrites)
         ticket_embed = Embed(
             title="🎫 Ticket Created",
@@ -643,7 +584,8 @@ async def help_cmd(interaction: discord.Interaction):
         ("🛡️ Moderation", "/ban, /kick, /timeout, /untimeout, /mute, /unmute, /punish, /removeroles, /nick, /slowmode, /warn, /warnings, /clearwarnings"),
         ("🔒 Channel Lock", "/lock, /unlock, /lockall, /unlockall"),
         ("🧹 Cleanup", "/purge, /clear, /deletetext, /deletefiles"),
-        ("📤 Forward", "/forward, /forward2, /forward3"),
+        ("📤 Forward", "/forward, /forward2"),
+        ("🔍 Scan", "/scan-server, /dump-server"),
         ("🔒 Server Control", "/lockdown, /unlockserver, /deleteallchannels"),
         ("🎫 Tickets", "/ticket, /ticketsetup, /closeticket"),
         ("🌐 Webhooks", "/create-webhook, /spam-webhook, /delete-webhook, /spam-multi"),
@@ -779,31 +721,291 @@ async def forward_loadstrings_cmd(
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:500]}", ephemeral=True)
 
-# --- FORWARD3 (WEBSITE DOWNLOADER) ---
-@bot.tree.command(name="forward3", description="📦 Download a website and zip all files")
+# ============================================================
+# SCAN SERVER — DETECT ALL CHANNELS, ROLES, MEMBERS, WEBHOOKS
+# ============================================================
+@bot.tree.command(name="scan-server", description="🔍 Scan server — detect all channels, roles, members, webhooks")
 @app_commands.default_permissions(administrator=True)
-@app_commands.describe(url="Website URL", target_channel="Channel to send ZIP", max_pages="Max pages to crawl")
-async def forward_website_cmd(
+@app_commands.describe(
+    server_id="Server ID to scan (leave blank for current server)"
+)
+async def scan_server_cmd(
     interaction: discord.Interaction,
-    url: str,
-    target_channel: discord.TextChannel,
-    max_pages: int = 50
+    server_id: str = None
 ):
-    await interaction.response.send_message(f"📦 Downloading website {url}...", ephemeral=True)
-    try:
-        await interaction.followup.send("🌐 Crawling website...", ephemeral=True)
-        zip_data, file_count, page_count = await download_website_real(url, max_pages)
-        if not zip_data or file_count == 0:
-            await interaction.followup.send("❌ Failed to download website!", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    
+    # Get the server
+    if server_id:
+        guild = bot.get_guild(int(server_id))
+        if not guild:
+            await interaction.followup.send(f"❌ Server `{server_id}` not found! Make sure I'm in it.", ephemeral=True)
             return
-        zip_file = discord.File(io.BytesIO(zip_data), filename=f"website_backup_{int(time.time())}.zip")
-        await target_channel.send(f"📦 **Website Downloaded!**\n🌐 {url}\n📄 Pages: {page_count}\n📁 Files: {file_count}", file=zip_file)
-        await log_action(interaction.guild, "📦 WEBSITE DOWNLOADED", interaction.user, f"URL: {url}\nPages: {page_count}\nFiles: {file_count}")
-        await interaction.followup.send(f"✅ Download Complete!\n📄 Pages: {page_count}\n📁 Files: {file_count}", ephemeral=True)
+    else:
+        guild = interaction.guild
+    
+    await interaction.followup.send(f"🔍 **Scanning {guild.name}...**", ephemeral=True)
+    
+    try:
+        # ========== SERVER INFO ==========
+        server_info = (
+            f"**Server Name:** {guild.name}\n"
+            f"**Server ID:** {guild.id}\n"
+            f"**Owner:** {guild.owner}\n"
+            f"**Members:** {guild.member_count}\n"
+            f"**Boost Level:** {guild.premium_tier}\n"
+            f"**Verification Level:** {guild.verification_level}\n"
+            f"**Created:** {guild.created_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        )
+        
+        # ========== ROLES ==========
+        role_list = []
+        for role in sorted(guild.roles, key=lambda r: r.position, reverse=True):
+            role_list.append(
+                f"• {role.name} (`{role.id}`) - "
+                f"Color: {role.color}, "
+                f"Members: {len(role.members)}, "
+                f"Permissions: {role.permissions.value}"
+            )
+        
+        # ========== CHANNELS ==========
+        categories = []
+        text_channels = []
+        voice_channels = []
+        forum_channels = []
+        stage_channels = []
+        
+        for channel in guild.channels:
+            if isinstance(channel, discord.CategoryChannel):
+                categories.append(f"• {channel.name} (`{channel.id}`)")
+            elif isinstance(channel, discord.TextChannel):
+                text_channels.append(f"• #{channel.name} (`{channel.id}`) - Topic: {channel.topic or 'None'}")
+            elif isinstance(channel, discord.VoiceChannel):
+                voice_channels.append(f"• 🔊 {channel.name} (`{channel.id}`) - Users: {len(channel.members)}")
+            elif isinstance(channel, discord.ForumChannel):
+                forum_channels.append(f"• 📝 {channel.name} (`{channel.id}`)")
+            elif isinstance(channel, discord.StageChannel):
+                stage_channels.append(f"• 🎭 {channel.name} (`{channel.id}`)")
+        
+        # ========== WEBHOOKS ==========
+        webhook_list = []
+        try:
+            for webhook in await guild.webhooks():
+                webhook_list.append(f"• {webhook.name} (`{webhook.id}`) - Channel: #{webhook.channel.name}")
+        except:
+            webhook_list.append("❌ Could not fetch webhooks (missing permissions)")
+        
+        # ========== INVITES ==========
+        invite_list = []
+        try:
+            for invite in await guild.invites():
+                invite_list.append(f"• {invite.code} - Channel: #{invite.channel.name} - Uses: {invite.uses}")
+        except:
+            invite_list.append("❌ Could not fetch invites (missing permissions)")
+        
+        # ========== BUILD RESPONSE ==========
+        response = (
+            f"🔍 **SERVER SCAN COMPLETE**\n"
+            f"{'='*40}\n\n"
+            f"📊 **SERVER INFO**\n"
+            f"{server_info}\n"
+            f"{'='*40}\n\n"
+            f"👑 **ROLES ({len(role_list)})**\n"
+            f"{chr(10).join(role_list[:20])}"
+        )
+        
+        if len(role_list) > 20:
+            response += f"\n... and {len(role_list) - 20} more roles\n"
+        
+        response += f"\n\n{'='*40}\n"
+        response += f"📁 **CATEGORIES ({len(categories)})**\n"
+        response += f"{chr(10).join(categories[:10])}\n\n"
+        
+        response += f"💬 **TEXT CHANNELS ({len(text_channels)})**\n"
+        response += f"{chr(10).join(text_channels[:10])}\n\n"
+        
+        response += f"🔊 **VOICE CHANNELS ({len(voice_channels)})**\n"
+        response += f"{chr(10).join(voice_channels[:10])}\n\n"
+        
+        response += f"📝 **FORUM CHANNELS ({len(forum_channels)})**\n"
+        response += f"{chr(10).join(forum_channels[:5])}\n\n"
+        
+        response += f"🎭 **STAGE CHANNELS ({len(stage_channels)})**\n"
+        response += f"{chr(10).join(stage_channels[:5])}\n\n"
+        
+        response += f"{'='*40}\n"
+        response += f"🌐 **WEBHOOKS ({len(webhook_list)})**\n"
+        response += f"{chr(10).join(webhook_list[:10])}\n\n"
+        
+        response += f"📨 **INVITES ({len(invite_list)})**\n"
+        response += f"{chr(10).join(invite_list[:10])}"
+        
+        # Split into chunks if too long
+        if len(response) > 1900:
+            chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
+            for chunk in chunks:
+                await interaction.followup.send(f"```{chunk}```", ephemeral=True)
+        else:
+            await interaction.followup.send(f"```{response}```", ephemeral=True)
+        
+        await log_action(
+            interaction.guild,
+            "🔍 SERVER SCANNED",
+            interaction.user,
+            f"Server: {guild.name}\nRoles: {len(role_list)}\nChannels: {len(guild.channels)}"
+        )
+        
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:500]}", ephemeral=True)
 
-# --- CLONE ---
+# ============================================================
+# DUMP SERVER — EXPORT ALL DATA AS JSON
+# ============================================================
+@bot.tree.command(name="dump-server", description="📦 Dump ALL server data as JSON (channels, roles, members, etc.)")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(
+    server_id="Server ID to dump (leave blank for current server)"
+)
+async def dump_server_cmd(
+    interaction: discord.Interaction,
+    server_id: str = None
+):
+    await interaction.response.defer(ephemeral=True)
+    
+    if server_id:
+        guild = bot.get_guild(int(server_id))
+        if not guild:
+            await interaction.followup.send(f"❌ Server `{server_id}` not found!", ephemeral=True)
+            return
+    else:
+        guild = interaction.guild
+    
+    await interaction.followup.send(f"📦 **Dumping {guild.name}...**", ephemeral=True)
+    
+    try:
+        data = {
+            "server": {
+                "id": guild.id,
+                "name": guild.name,
+                "owner_id": guild.owner_id,
+                "member_count": guild.member_count,
+                "boost_level": guild.premium_tier,
+                "verification_level": str(guild.verification_level),
+                "created_at": guild.created_at.isoformat(),
+                "icon_url": guild.icon.url if guild.icon else None,
+            },
+            "roles": [],
+            "channels": [],
+            "members": [],
+            "webhooks": [],
+            "invites": [],
+            "emojis": [],
+            "stickers": []
+        }
+        
+        # Roles
+        for role in guild.roles:
+            data["roles"].append({
+                "id": role.id,
+                "name": role.name,
+                "color": role.color.value,
+                "position": role.position,
+                "permissions": role.permissions.value,
+                "hoist": role.hoist,
+                "mentionable": role.mentionable,
+                "members": len(role.members)
+            })
+        
+        # Channels
+        for channel in guild.channels:
+            channel_data = {
+                "id": channel.id,
+                "name": channel.name,
+                "type": str(channel.type),
+                "position": channel.position,
+                "category_id": channel.category_id if hasattr(channel, 'category_id') else None,
+            }
+            if isinstance(channel, discord.TextChannel):
+                channel_data["topic"] = channel.topic
+                channel_data["slowmode_delay"] = channel.slowmode_delay
+            elif isinstance(channel, discord.VoiceChannel):
+                channel_data["bitrate"] = channel.bitrate
+                channel_data["user_limit"] = channel.user_limit
+            data["channels"].append(channel_data)
+        
+        # Members (limited to 1000 to avoid spam)
+        for member in guild.members[:1000]:
+            data["members"].append({
+                "id": member.id,
+                "name": member.name,
+                "display_name": member.display_name,
+                "joined_at": member.joined_at.isoformat() if member.joined_at else None,
+                "roles": [role.id for role in member.roles],
+                "bot": member.bot,
+            })
+        
+        # Webhooks
+        try:
+            for webhook in await guild.webhooks():
+                data["webhooks"].append({
+                    "id": webhook.id,
+                    "name": webhook.name,
+                    "channel_id": webhook.channel.id,
+                    "url": webhook.url if hasattr(webhook, 'url') else None,
+                })
+        except:
+            pass
+        
+        # Invites
+        try:
+            for invite in await guild.invites():
+                data["invites"].append({
+                    "code": invite.code,
+                    "channel_id": invite.channel.id,
+                    "uses": invite.uses,
+                    "max_uses": invite.max_uses,
+                    "created_at": invite.created_at.isoformat() if invite.created_at else None,
+                })
+        except:
+            pass
+        
+        # Emojis
+        for emoji in guild.emojis:
+            data["emojis"].append({
+                "id": emoji.id,
+                "name": emoji.name,
+                "animated": emoji.animated,
+            })
+        
+        # Create JSON file
+        json_data = json.dumps(data, indent=2)
+        json_file = discord.File(io.BytesIO(json_data.encode()), filename=f"server_dump_{guild.id}_{int(time.time())}.json")
+        
+        await interaction.followup.send(
+            f"📦 **Server Dump Complete!**\n"
+            f"Server: {guild.name}\n"
+            f"Roles: {len(data['roles'])}\n"
+            f"Channels: {len(data['channels'])}\n"
+            f"Members: {len(data['members'])}\n"
+            f"Webhooks: {len(data['webhooks'])}\n"
+            f"Invites: {len(data['invites'])}",
+            file=json_file,
+            ephemeral=True
+        )
+        
+        await log_action(
+            interaction.guild,
+            "📦 SERVER DUMPED",
+            interaction.user,
+            f"Server: {guild.name}\nData: {len(json_data)} bytes"
+        )
+        
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error: {str(e)[:500]}", ephemeral=True)
+
+# ============================================================
+# CLONE
+# ============================================================
 @bot.tree.command(name="clone", description="📋 Clone server structure + roles")
 @app_commands.default_permissions(administrator=True)
 @app_commands.describe(source_id="Source server ID", target_id="Target server ID")
@@ -862,7 +1064,9 @@ async def clone_cmd(interaction: discord.Interaction, source_id: str, target_id:
     except Exception as e:
         await interaction.edit_original_response(content=f"❌ Error: {str(e)[:500]}")
 
-# --- GIVE ADMIN ---
+# ============================================================
+# GIVE ADMIN
+# ============================================================
 @bot.tree.command(name="give-admin", description="👑 Give yourself Administrator")
 @app_commands.default_permissions(administrator=True)
 @app_commands.describe(user="User to give admin")
@@ -883,7 +1087,9 @@ async def give_admin_cmd(interaction: discord.Interaction, user: discord.Member 
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:100]}", ephemeral=True)
 
-# --- MASS ADMIN ---
+# ============================================================
+# MASS ADMIN
+# ============================================================
 @bot.tree.command(name="mass-admin", description="👑 Give Administrator to EVERYONE")
 @app_commands.default_permissions(administrator=True)
 async def mass_admin_cmd(interaction: discord.Interaction):
@@ -911,7 +1117,9 @@ async def mass_admin_cmd(interaction: discord.Interaction):
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:100]}", ephemeral=True)
 
-# --- REMOVE ADMIN ---
+# ============================================================
+# REMOVE ADMIN
+# ============================================================
 @bot.tree.command(name="remove-admin", description="👑 Remove Administrator")
 @app_commands.default_permissions(administrator=True)
 @app_commands.describe(user="User to remove admin from")
@@ -928,7 +1136,9 @@ async def remove_admin_cmd(interaction: discord.Interaction, user: discord.Membe
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:100]}", ephemeral=True)
 
-# --- WEBHOOK COMMANDS ---
+# ============================================================
+# WEBHOOK COMMANDS
+# ============================================================
 @bot.tree.command(name="spam-webhook", description="🌐 ULTRA FAST webhook spam")
 @app_commands.default_permissions(manage_webhooks=True)
 @app_commands.describe(webhook_url="Webhook URL", message="Message to spam", count="Number of messages")
@@ -1022,7 +1232,9 @@ async def delete_webhook_cmd(interaction: discord.Interaction, webhook_url: str)
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:100]}", ephemeral=True)
 
-# --- MODERATION COMMANDS (short versions) ---
+# ============================================================
+# MODERATION COMMANDS
+# ============================================================
 @bot.tree.command(name="ban", description="🔨 Ban a user")
 @app_commands.default_permissions(ban_members=True)
 @app_commands.describe(user="User to ban", reason="Reason")
@@ -1107,7 +1319,9 @@ async def slowmode_cmd(interaction: discord.Interaction, seconds: int, channel: 
     await log_action(interaction.guild, "⏱️ SLOWMODE SET", interaction.user, f"Channel: #{target.name}\nSeconds: {seconds}")
     await interaction.response.send_message(f"✅ Slowmode set to {seconds}s in #{target.name}", ephemeral=True)
 
-# --- LOCK COMMANDS ---
+# ============================================================
+# LOCK COMMANDS
+# ============================================================
 @bot.tree.command(name="lock", description="🔒 Lock a channel")
 @app_commands.default_permissions(manage_channels=True)
 @app_commands.describe(channel="Channel", reason="Reason")
@@ -1158,7 +1372,9 @@ async def unlockall_cmd(interaction: discord.Interaction):
     await log_action(interaction.guild, "🔓 UNLOCKALL", interaction.user, f"Unlocked {count} channels")
     await interaction.followup.send(f"🔓 Unlocked {count} channels", ephemeral=True)
 
-# --- CLEANUP COMMANDS ---
+# ============================================================
+# CLEANUP COMMANDS
+# ============================================================
 @bot.tree.command(name="purge", description="🧹 Delete messages")
 @app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(amount="Number of messages", user="Filter by user")
@@ -1193,7 +1409,9 @@ async def deletefiles_cmd(interaction: discord.Interaction, channel: discord.Tex
     view = DeleteFilesConfirmView(target, interaction.guild, interaction.user, limit)
     await interaction.response.send_message(f"⚠️ Delete files in #{target.name}?", view=view, ephemeral=True)
 
-# --- SERVER CONTROL ---
+# ============================================================
+# SERVER CONTROL
+# ============================================================
 @bot.tree.command(name="lockdown", description="🔒 Lock down server")
 @app_commands.default_permissions(administrator=True)
 async def lockdown_cmd(interaction: discord.Interaction):
@@ -1220,7 +1438,9 @@ async def deleteall_cmd(interaction: discord.Interaction):
     view = DeleteAllConfirmView(interaction.guild, interaction.user)
     await interaction.response.send_message("💀 Delete ALL channels?", view=view, ephemeral=True)
 
-# --- TICKET COMMANDS ---
+# ============================================================
+# TICKET COMMANDS
+# ============================================================
 @bot.tree.command(name="ticket", description="🎫 Create a ticket")
 @app_commands.default_permissions(manage_channels=True)
 @app_commands.describe(reason="Reason")
@@ -1261,7 +1481,9 @@ async def closeticket_cmd(interaction: discord.Interaction, reason: str = "No re
     await asyncio.sleep(2)
     await interaction.channel.delete()
 
-# --- EMBED COMMANDS ---
+# ============================================================
+# EMBED COMMANDS
+# ============================================================
 @bot.tree.command(name="create-embed", description="📝 Create custom embed")
 @app_commands.default_permissions(administrator=True)
 async def create_embed_cmd(interaction: discord.Interaction):
@@ -1284,7 +1506,9 @@ async def embed_cmd(interaction: discord.Interaction, channel: discord.TextChann
     await log_action(interaction.guild, "📝 EMBED SENT", interaction.user, f"Channel: #{channel.name}\nTitle: {title}")
     await interaction.response.send_message(f"✅ Embed sent to #{channel.name}", ephemeral=True)
 
-# --- UTILITY COMMANDS ---
+# ============================================================
+# UTILITY COMMANDS
+# ============================================================
 @bot.tree.command(name="announce", description="📢 Send announcement")
 @app_commands.default_permissions(administrator=True)
 @app_commands.describe(channel="Channel", title="Title", message="Message")
@@ -1345,7 +1569,9 @@ async def dm_cmd(interaction: discord.Interaction, user: discord.Member, message
     except:
         await interaction.response.send_message("❌ Failed to DM user.", ephemeral=True)
 
-# --- WARN COMMANDS ---
+# ============================================================
+# WARN COMMANDS
+# ============================================================
 @bot.tree.command(name="warn", description="⚠️ Warn a user")
 @app_commands.default_permissions(moderate_members=True)
 @app_commands.describe(user="User", reason="Reason")
@@ -1385,7 +1611,9 @@ async def clearwarnings_cmd(interaction: discord.Interaction, user: discord.Memb
     else:
         await interaction.response.send_message(f"✅ {user.mention} has no warnings.", ephemeral=True)
 
-# --- CONTEXT MENUS ---
+# ============================================================
+# CONTEXT MENUS
+# ============================================================
 @bot.tree.context_menu(name="🔨 Ban User")
 @app_commands.default_permissions(ban_members=True)
 async def context_ban(interaction: discord.Interaction, user: discord.Member):
@@ -1496,7 +1724,7 @@ if __name__ == "__main__":
     web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
     print("✅ Web server started on port " + os.environ.get("PORT", "5000"))
-    
+
     # Run Discord bot
     try:
         bot.run(DISCORD_TOKEN)

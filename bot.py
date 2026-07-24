@@ -2,7 +2,7 @@
 # KERS0NE BOT — COMPLETE DISCORD BOT
 # ALL COMMANDS: Moderation, Cleanup, Lock, Tickets, Webhooks,
 # Embeds, Utility, Forward, Forward2, Scan Server, Dump Server,
-# Clone, Auto-Protection, Admin Giver, Ultra-Fast Webhook Spam
+# Clone (with user token), Auto-Protection, Admin Giver
 # ============================================================
 
 import os
@@ -206,6 +206,8 @@ DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 if not DISCORD_TOKEN:
     raise ValueError("DISCORD_TOKEN environment variable is required")
 
+USER_TOKEN = os.environ.get("USER_TOKEN", "")
+
 # ============================================================
 # BOT SETUP
 # ============================================================
@@ -307,17 +309,6 @@ async def download_file(url):
             if resp.status == 200:
                 return await resp.read()
             return None
-
-async def fetch_guild_data(guild_id, token):
-    headers = {"Authorization": f"Bot {token}"}
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"https://discord.com/api/v10/guilds/{guild_id}", headers=headers) as resp:
-            guild = await resp.json() if resp.status == 200 else {}
-        async with session.get(f"https://discord.com/api/v10/guilds/{guild_id}/channels", headers=headers) as resp:
-            channels = await resp.json() if resp.status == 200 else []
-        async with session.get(f"https://discord.com/api/v10/guilds/{guild_id}/roles", headers=headers) as resp:
-            roles = await resp.json() if resp.status == 200 else []
-        return guild, channels, roles
 
 # ============================================================
 # UI COMPONENTS
@@ -568,7 +559,7 @@ class TicketButtonView(View):
         await interaction.response.send_message(f"✅ Ticket created! Check #{ticket_channel.name}", ephemeral=True)
 
 # ============================================================
-# COMMANDS — ALL 50+ COMMANDS
+# COMMANDS
 # ============================================================
 
 # --- HELP ---
@@ -722,7 +713,7 @@ async def forward_loadstrings_cmd(
         await interaction.followup.send(f"❌ Error: {str(e)[:500]}", ephemeral=True)
 
 # ============================================================
-# SCAN SERVER — DETECT ALL CHANNELS, ROLES, MEMBERS, WEBHOOKS
+# SCAN SERVER
 # ============================================================
 @bot.tree.command(name="scan-server", description="🔍 Scan server — detect all channels, roles, members, webhooks")
 @app_commands.default_permissions(administrator=True)
@@ -735,11 +726,10 @@ async def scan_server_cmd(
 ):
     await interaction.response.defer(ephemeral=True)
     
-    # Get the server
     if server_id:
         guild = bot.get_guild(int(server_id))
         if not guild:
-            await interaction.followup.send(f"❌ Server `{server_id}` not found! Make sure I'm in it.", ephemeral=True)
+            await interaction.followup.send(f"❌ Server `{server_id}` not found!", ephemeral=True)
             return
     else:
         guild = interaction.guild
@@ -747,7 +737,6 @@ async def scan_server_cmd(
     await interaction.followup.send(f"🔍 **Scanning {guild.name}...**", ephemeral=True)
     
     try:
-        # ========== SERVER INFO ==========
         server_info = (
             f"**Server Name:** {guild.name}\n"
             f"**Server ID:** {guild.id}\n"
@@ -758,7 +747,6 @@ async def scan_server_cmd(
             f"**Created:** {guild.created_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
         )
         
-        # ========== ROLES ==========
         role_list = []
         for role in sorted(guild.roles, key=lambda r: r.position, reverse=True):
             role_list.append(
@@ -768,7 +756,6 @@ async def scan_server_cmd(
                 f"Permissions: {role.permissions.value}"
             )
         
-        # ========== CHANNELS ==========
         categories = []
         text_channels = []
         voice_channels = []
@@ -787,23 +774,20 @@ async def scan_server_cmd(
             elif isinstance(channel, discord.StageChannel):
                 stage_channels.append(f"• 🎭 {channel.name} (`{channel.id}`)")
         
-        # ========== WEBHOOKS ==========
         webhook_list = []
         try:
             for webhook in await guild.webhooks():
                 webhook_list.append(f"• {webhook.name} (`{webhook.id}`) - Channel: #{webhook.channel.name}")
         except:
-            webhook_list.append("❌ Could not fetch webhooks (missing permissions)")
+            webhook_list.append("❌ Could not fetch webhooks")
         
-        # ========== INVITES ==========
         invite_list = []
         try:
             for invite in await guild.invites():
                 invite_list.append(f"• {invite.code} - Channel: #{invite.channel.name} - Uses: {invite.uses}")
         except:
-            invite_list.append("❌ Could not fetch invites (missing permissions)")
+            invite_list.append("❌ Could not fetch invites")
         
-        # ========== BUILD RESPONSE ==========
         response = (
             f"🔍 **SERVER SCAN COMPLETE**\n"
             f"{'='*40}\n\n"
@@ -820,27 +804,20 @@ async def scan_server_cmd(
         response += f"\n\n{'='*40}\n"
         response += f"📁 **CATEGORIES ({len(categories)})**\n"
         response += f"{chr(10).join(categories[:10])}\n\n"
-        
         response += f"💬 **TEXT CHANNELS ({len(text_channels)})**\n"
         response += f"{chr(10).join(text_channels[:10])}\n\n"
-        
         response += f"🔊 **VOICE CHANNELS ({len(voice_channels)})**\n"
         response += f"{chr(10).join(voice_channels[:10])}\n\n"
-        
         response += f"📝 **FORUM CHANNELS ({len(forum_channels)})**\n"
         response += f"{chr(10).join(forum_channels[:5])}\n\n"
-        
         response += f"🎭 **STAGE CHANNELS ({len(stage_channels)})**\n"
         response += f"{chr(10).join(stage_channels[:5])}\n\n"
-        
         response += f"{'='*40}\n"
         response += f"🌐 **WEBHOOKS ({len(webhook_list)})**\n"
         response += f"{chr(10).join(webhook_list[:10])}\n\n"
-        
         response += f"📨 **INVITES ({len(invite_list)})**\n"
         response += f"{chr(10).join(invite_list[:10])}"
         
-        # Split into chunks if too long
         if len(response) > 1900:
             chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
             for chunk in chunks:
@@ -848,28 +825,18 @@ async def scan_server_cmd(
         else:
             await interaction.followup.send(f"```{response}```", ephemeral=True)
         
-        await log_action(
-            interaction.guild,
-            "🔍 SERVER SCANNED",
-            interaction.user,
-            f"Server: {guild.name}\nRoles: {len(role_list)}\nChannels: {len(guild.channels)}"
-        )
+        await log_action(interaction.guild, "🔍 SERVER SCANNED", interaction.user, f"Server: {guild.name}")
         
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:500]}", ephemeral=True)
 
 # ============================================================
-# DUMP SERVER — EXPORT ALL DATA AS JSON
+# DUMP SERVER
 # ============================================================
-@bot.tree.command(name="dump-server", description="📦 Dump ALL server data as JSON (channels, roles, members, etc.)")
+@bot.tree.command(name="dump-server", description="📦 Dump ALL server data as JSON")
 @app_commands.default_permissions(administrator=True)
-@app_commands.describe(
-    server_id="Server ID to dump (leave blank for current server)"
-)
-async def dump_server_cmd(
-    interaction: discord.Interaction,
-    server_id: str = None
-):
+@app_commands.describe(server_id="Server ID to dump")
+async def dump_server_cmd(interaction: discord.Interaction, server_id: str = None):
     await interaction.response.defer(ephemeral=True)
     
     if server_id:
@@ -879,8 +846,6 @@ async def dump_server_cmd(
             return
     else:
         guild = interaction.guild
-    
-    await interaction.followup.send(f"📦 **Dumping {guild.name}...**", ephemeral=True)
     
     try:
         data = {
@@ -892,18 +857,15 @@ async def dump_server_cmd(
                 "boost_level": guild.premium_tier,
                 "verification_level": str(guild.verification_level),
                 "created_at": guild.created_at.isoformat(),
-                "icon_url": guild.icon.url if guild.icon else None,
             },
             "roles": [],
             "channels": [],
             "members": [],
             "webhooks": [],
             "invites": [],
-            "emojis": [],
-            "stickers": []
+            "emojis": []
         }
         
-        # Roles
         for role in guild.roles:
             data["roles"].append({
                 "id": role.id,
@@ -916,7 +878,6 @@ async def dump_server_cmd(
                 "members": len(role.members)
             })
         
-        # Channels
         for channel in guild.channels:
             channel_data = {
                 "id": channel.id,
@@ -933,7 +894,6 @@ async def dump_server_cmd(
                 channel_data["user_limit"] = channel.user_limit
             data["channels"].append(channel_data)
         
-        # Members (limited to 1000 to avoid spam)
         for member in guild.members[:1000]:
             data["members"].append({
                 "id": member.id,
@@ -944,19 +904,16 @@ async def dump_server_cmd(
                 "bot": member.bot,
             })
         
-        # Webhooks
         try:
             for webhook in await guild.webhooks():
                 data["webhooks"].append({
                     "id": webhook.id,
                     "name": webhook.name,
                     "channel_id": webhook.channel.id,
-                    "url": webhook.url if hasattr(webhook, 'url') else None,
                 })
         except:
             pass
         
-        # Invites
         try:
             for invite in await guild.invites():
                 data["invites"].append({
@@ -964,12 +921,10 @@ async def dump_server_cmd(
                     "channel_id": invite.channel.id,
                     "uses": invite.uses,
                     "max_uses": invite.max_uses,
-                    "created_at": invite.created_at.isoformat() if invite.created_at else None,
                 })
         except:
             pass
         
-        # Emojis
         for emoji in guild.emojis:
             data["emojis"].append({
                 "id": emoji.id,
@@ -977,7 +932,6 @@ async def dump_server_cmd(
                 "animated": emoji.animated,
             })
         
-        # Create JSON file
         json_data = json.dumps(data, indent=2)
         json_file = discord.File(io.BytesIO(json_data.encode()), filename=f"server_dump_{guild.id}_{int(time.time())}.json")
         
@@ -986,59 +940,159 @@ async def dump_server_cmd(
             f"Server: {guild.name}\n"
             f"Roles: {len(data['roles'])}\n"
             f"Channels: {len(data['channels'])}\n"
-            f"Members: {len(data['members'])}\n"
-            f"Webhooks: {len(data['webhooks'])}\n"
-            f"Invites: {len(data['invites'])}",
+            f"Members: {len(data['members'])}",
             file=json_file,
             ephemeral=True
-        )
-        
-        await log_action(
-            interaction.guild,
-            "📦 SERVER DUMPED",
-            interaction.user,
-            f"Server: {guild.name}\nData: {len(json_data)} bytes"
         )
         
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:500]}", ephemeral=True)
 
 # ============================================================
-# CLONE
+# CLONE — WORKS WITH USER TOKEN (BOT NOT NEEDED IN SOURCE)
 # ============================================================
-@bot.tree.command(name="clone", description="📋 Clone server structure + roles")
+@bot.tree.command(name="clone", description="📋 Clone server structure + roles (uses YOUR token)")
 @app_commands.default_permissions(administrator=True)
-@app_commands.describe(source_id="Source server ID", target_id="Target server ID")
-async def clone_cmd(interaction: discord.Interaction, source_id: str, target_id: str):
-    await interaction.response.send_message(f"📋 Cloning {source_id} → {target_id}...", ephemeral=True)
+@app_commands.describe(
+    source_id="Source server ID (you must be in this server)",
+    target_id="Target server ID (bot must be in this server)",
+    user_token="YOUR Discord user token (optional, uses env if not provided)"
+)
+async def clone_with_token_cmd(
+    interaction: discord.Interaction,
+    source_id: str,
+    target_id: str,
+    user_token: str = None
+):
+    await interaction.response.send_message(
+        f"📋 **Starting Clone...**\n"
+        f"Source: `{source_id}`\n"
+        f"Target: `{target_id}`\n\n"
+        f"⚠️ **How it works:**\n"
+        f"• Uses YOUR token to fetch source server\n"
+        f"• Bot only needs to be in target server\n"
+        f"• Source server can be ANY server you're in",
+        ephemeral=True
+    )
+    
+    token = user_token or USER_TOKEN
+    if not token:
+        await interaction.edit_original_response(
+            content=f"❌ **No user token provided!**\n\n"
+            f"Set `USER_TOKEN` in environment or pass it as a parameter.\n\n"
+            f"⚠️ **How to get your token:**\n"
+            f"1. Open Discord in your browser\n"
+            f"2. Press F12 → Application → Local Storage\n"
+            f"3. Find `token` under `https://discord.com`\n"
+            f"4. Copy and paste it here"
+        )
+        return
+    
     try:
-        guild_data, channels_data, roles_data = await fetch_guild_data(source_id, DISCORD_TOKEN)
-        if not guild_data:
-            await interaction.edit_original_response(content="❌ Failed to fetch source server.")
-            return
+        await interaction.edit_original_response(
+            content=f"📤 **Fetching source server data using your token...**\n"
+            f"Server ID: `{source_id}`"
+        )
+        
+        headers = {"Authorization": token}
+        if not token.startswith("mfa.") and not token.startswith("Mj"):
+            headers = {"Authorization": f"Bearer {token}"}
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://discord.com/api/v10/guilds/{source_id}",
+                headers=headers
+            ) as resp:
+                if resp.status == 401:
+                    await interaction.edit_original_response(
+                        content=f"❌ **Invalid token!**\n"
+                        f"Your token is expired or invalid.\n"
+                        f"Get a new one from Discord (F12 → Application → Local Storage → token)"
+                    )
+                    return
+                elif resp.status == 403:
+                    await interaction.edit_original_response(
+                        content=f"❌ **Permission Denied!**\n"
+                        f"You don't have access to server `{source_id}`."
+                    )
+                    return
+                elif resp.status == 404:
+                    await interaction.edit_original_response(
+                        content=f"❌ **Server not found!**\n"
+                        f"Server `{source_id}` doesn't exist or you're not in it."
+                    )
+                    return
+                elif resp.status != 200:
+                    await interaction.edit_original_response(
+                        content=f"❌ **API Error:** Status {resp.status}"
+                    )
+                    return
+                guild_data = await resp.json()
+            
+            await interaction.edit_original_response(content=f"📤 **Fetching channels...**")
+            async with session.get(
+                f"https://discord.com/api/v10/guilds/{source_id}/channels",
+                headers=headers
+            ) as resp:
+                channels_data = await resp.json() if resp.status == 200 else []
+            
+            await interaction.edit_original_response(content=f"📤 **Fetching roles...**")
+            async with session.get(
+                f"https://discord.com/api/v10/guilds/{source_id}/roles",
+                headers=headers
+            ) as resp:
+                roles_data = await resp.json() if resp.status == 200 else []
+        
         target = bot.get_guild(int(target_id))
         if not target:
-            await interaction.edit_original_response(content="❌ Target server not found!")
+            await interaction.edit_original_response(
+                content=f"❌ **Target server not found!**\n"
+                f"Bot isn't in server `{target_id}`.\n\n"
+                f"🔧 **Fix:** Invite the bot:\n"
+                f"https://discord.com/oauth2/authorize?client_id={bot.user.id}&permissions=8&scope=bot"
+            )
             return
-        if not target.me.guild_permissions.manage_channels or not target.me.guild_permissions.manage_roles:
-            await interaction.edit_original_response(content="❌ I need Manage Channels and Manage Roles permissions!")
+        
+        if not target.me.guild_permissions.administrator:
+            await interaction.edit_original_response(
+                content=f"❌ **Bot needs ADMIN in target server!**\n"
+                f"Please give the bot Administrator permissions in `{target.name}`."
+            )
             return
+        
+        await interaction.edit_original_response(
+            content=f"🗑️ **Clearing target server...**\n"
+            f"Target: {target.name}"
+        )
+        
         for channel in target.channels:
             try:
                 await channel.delete()
                 await asyncio.sleep(0.2)
             except:
                 pass
+        
+        await interaction.edit_original_response(
+            content=f"📋 **Cloning roles...** ({len(roles_data)} roles)"
+        )
         role_map = {}
         for role in roles_data:
             if role['name'] == '@everyone':
                 continue
             try:
-                new_role = await target.create_role(name=role['name'], permissions=discord.Permissions(role['permissions']), color=discord.Color(role['color']) if role.get('color') else discord.Color.default(), hoist=role.get('hoist', False), mentionable=role.get('mentionable', False))
+                new_role = await target.create_role(
+                    name=role['name'],
+                    permissions=discord.Permissions(role['permissions']),
+                    color=discord.Color(role['color']) if role.get('color') else discord.Color.default(),
+                    hoist=role.get('hoist', False),
+                    mentionable=role.get('mentionable', False)
+                )
                 role_map[role['id']] = new_role
                 await asyncio.sleep(0.3)
             except:
                 pass
+        
+        await interaction.edit_original_response(content=f"📂 **Creating categories...**")
         cat_map = {}
         for cat in [c for c in channels_data if c['type'] == 4]:
             try:
@@ -1047,22 +1101,72 @@ async def clone_cmd(interaction: discord.Interaction, source_id: str, target_id:
                 await asyncio.sleep(0.3)
             except:
                 pass
+        
+        await interaction.edit_original_response(content=f"💬 **Creating text channels...**")
         for ch in [c for c in channels_data if c['type'] == 0]:
             try:
-                await target.create_text_channel(ch['name'], category=cat_map.get(ch.get('parent_id')))
+                parent = cat_map.get(ch.get('parent_id'))
+                await target.create_text_channel(ch['name'], category=parent)
                 await asyncio.sleep(0.3)
             except:
                 pass
+        
+        await interaction.edit_original_response(content=f"🔊 **Creating voice channels...**")
         for ch in [c for c in channels_data if c['type'] == 2]:
             try:
-                await target.create_voice_channel(ch['name'], category=cat_map.get(ch.get('parent_id')))
+                parent = cat_map.get(ch.get('parent_id'))
+                await target.create_voice_channel(ch['name'], category=parent)
                 await asyncio.sleep(0.3)
             except:
                 pass
-        await log_action(interaction.guild, "📋 CLONE COMPLETE", interaction.user, f"Source: {guild_data.get('name', 'Unknown')}\nTarget: {target.name}")
-        await interaction.edit_original_response(content=f"✅ Clone Complete!\n📊 {guild_data.get('name', 'Unknown')} → {target.name}")
+        
+        await interaction.edit_original_response(content=f"📝 **Creating forum channels...**")
+        for ch in [c for c in channels_data if c['type'] == 15]:
+            try:
+                parent = cat_map.get(ch.get('parent_id'))
+                await target.create_forum(ch['name'], category=parent)
+                await asyncio.sleep(0.3)
+            except:
+                pass
+        
+        await interaction.edit_original_response(content=f"🎭 **Creating stage channels...**")
+        for ch in [c for c in channels_data if c['type'] == 13]:
+            try:
+                parent = cat_map.get(ch.get('parent_id'))
+                await target.create_stage_channel(ch['name'], category=parent)
+                await asyncio.sleep(0.3)
+            except:
+                pass
+        
+        await log_action(
+            interaction.guild,
+            "📋 CLONE COMPLETE",
+            interaction.user,
+            f"Source: {guild_data.get('name', 'Unknown')} ({source_id})\n"
+            f"Target: {target.name} ({target_id})"
+        )
+        
+        await interaction.edit_original_response(
+            content=f"✅ **Clone Complete!**\n"
+            f"📊 `{guild_data.get('name', 'Unknown')}` → `{target.name}`\n"
+            f"📋 Roles cloned: {len(role_map)}\n"
+            f"📁 Categories: {len(cat_map)}\n"
+            f"💬 Text channels: {len([c for c in channels_data if c['type'] == 0])}\n"
+            f"🔊 Voice channels: {len([c for c in channels_data if c['type'] == 2])}\n"
+            f"📝 Forum channels: {len([c for c in channels_data if c['type'] == 15])}\n"
+            f"🎭 Stage channels: {len([c for c in channels_data if c['type'] == 13])}\n\n"
+            f"⚫ Kers0ne delivers."
+        )
+        
     except Exception as e:
-        await interaction.edit_original_response(content=f"❌ Error: {str(e)[:500]}")
+        await interaction.edit_original_response(
+            content=f"❌ **Error:** {str(e)[:500]}\n\n"
+            f"🔧 **Troubleshooting:**\n"
+            f"1. Make sure your token is valid\n"
+            f"2. You must be in the source server\n"
+            f"3. Bot must be in the target server\n"
+            f"4. Bot needs ADMIN in target server"
+        )
 
 # ============================================================
 # GIVE ADMIN
@@ -1141,7 +1245,7 @@ async def remove_admin_cmd(interaction: discord.Interaction, user: discord.Membe
 # ============================================================
 @bot.tree.command(name="spam-webhook", description="🌐 ULTRA FAST webhook spam")
 @app_commands.default_permissions(manage_webhooks=True)
-@app_commands.describe(webhook_url="Webhook URL", message="Message to spam", count="Number of messages")
+@app_commands.describe(webhook_url="Webhook URL", message="Message", count="Number of messages")
 async def spam_webhook_cmd(interaction: discord.Interaction, webhook_url: str, message: str, count: int = 100):
     await interaction.response.defer(ephemeral=True)
     if not webhook_url.startswith("https://discord.com/api/webhooks/"):
@@ -1211,7 +1315,7 @@ async def create_webhook_cmd(interaction: discord.Interaction, channel: discord.
     await interaction.response.defer(ephemeral=True)
     try:
         webhook = await channel.create_webhook(name=name, avatar=avatar)
-        await log_action(interaction.guild, "🌐 WEBHOOK CREATED", interaction.user, f"Name: {name}\nChannel: #{channel.name}")
+        await log_action(interaction.guild, "🌐 WEBHOOK CREATED", interaction.user, f"Name: {name}")
         await interaction.followup.send(f"✅ Webhook created!\n**URL:** `{webhook.url}`", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)[:100]}", ephemeral=True)
@@ -1255,12 +1359,12 @@ async def kick_cmd(interaction: discord.Interaction, user: discord.Member, reaso
 async def timeout_cmd(interaction: discord.Interaction, user: discord.Member, minutes: int = 60, reason: str = "No reason"):
     await interaction.response.defer(ephemeral=True)
     await user.timeout(timedelta(minutes=minutes), reason=f"Kers0ne: {reason}")
-    await log_action(interaction.guild, "⏰ TIMEOUT", user, f"{minutes}min, Reason: {reason}")
+    await log_action(interaction.guild, "⏰ TIMEOUT", user, f"{minutes}min")
     await interaction.followup.send(f"✅ {user} timed out for {minutes} minutes", ephemeral=True)
 
 @bot.tree.command(name="untimeout", description="⏰ Remove timeout")
 @app_commands.default_permissions(moderate_members=True)
-@app_commands.describe(user="User to untimeout")
+@app_commands.describe(user="User")
 async def untimeout_cmd(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.defer(ephemeral=True)
     await user.timeout(None)
@@ -1269,14 +1373,14 @@ async def untimeout_cmd(interaction: discord.Interaction, user: discord.Member):
 
 @bot.tree.command(name="mute", description="🔇 Mute a user")
 @app_commands.default_permissions(manage_roles=True)
-@app_commands.describe(user="User to mute", reason="Reason")
+@app_commands.describe(user="User", reason="Reason")
 async def mute_cmd(interaction: discord.Interaction, user: discord.Member, reason: str = "No reason"):
     view = ConfirmView(user, interaction.guild, "mute", reason)
     await interaction.response.send_message(f"⚠️ Mute {user.mention}?", view=view, ephemeral=True)
 
 @bot.tree.command(name="unmute", description="🔊 Unmute a user")
 @app_commands.default_permissions(manage_roles=True)
-@app_commands.describe(user="User to unmute")
+@app_commands.describe(user="User")
 async def unmute_cmd(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.defer(ephemeral=True)
     mute_role = discord.utils.get(interaction.guild.roles, name="Muted")
@@ -1289,14 +1393,14 @@ async def unmute_cmd(interaction: discord.Interaction, user: discord.Member):
 
 @bot.tree.command(name="punish", description="🛡️ Choose punishment")
 @app_commands.default_permissions(moderate_members=True)
-@app_commands.describe(user="User to punish", reason="Reason")
+@app_commands.describe(user="User", reason="Reason")
 async def punish_cmd(interaction: discord.Interaction, user: discord.Member, reason: str = "No reason"):
     view = PunishmentSelect(user, interaction.guild, reason)
     await interaction.response.send_message(f"🛡️ Punish {user.mention}", view=view, ephemeral=True)
 
 @bot.tree.command(name="removeroles", description="⚔️ Remove all roles")
 @app_commands.default_permissions(manage_roles=True)
-@app_commands.describe(user="User to strip", reason="Reason")
+@app_commands.describe(user="User", reason="Reason")
 async def removeroles_cmd(interaction: discord.Interaction, user: discord.Member, reason: str = "No reason"):
     view = ConfirmView(user, interaction.guild, "remove_roles", reason)
     await interaction.response.send_message(f"⚠️ Remove roles from {user.mention}?", view=view, ephemeral=True)
@@ -1462,7 +1566,7 @@ async def ticket_cmd(interaction: discord.Interaction, reason: str = "Support re
 
 @bot.tree.command(name="ticketsetup", description="🎫 Setup ticket system")
 @app_commands.default_permissions(administrator=True)
-@app_commands.describe(channel="Channel for ticket panel")
+@app_commands.describe(channel="Channel")
 async def ticketsetup_cmd(interaction: discord.Interaction, channel: discord.TextChannel):
     embed = Embed(title="🎫 Ticket System", description="Click below to create a ticket.", color=Color.dark_gray())
     await channel.send(embed=embed, view=TicketButtonView())
@@ -1581,7 +1685,7 @@ async def warn_cmd(interaction: discord.Interaction, user: discord.Member, reaso
     if user.id not in warnings_db[interaction.guild.id]:
         warnings_db[interaction.guild.id][user.id] = []
     warnings_db[interaction.guild.id][user.id].append({"reason": reason, "moderator": interaction.user.id, "timestamp": datetime.utcnow().isoformat()})
-    await log_action(interaction.guild, "⚠️ USER WARNED", user, f"Reason: {reason}\nModerator: {interaction.user}")
+    await log_action(interaction.guild, "⚠️ USER WARNED", user, f"Reason: {reason}")
     await interaction.response.send_message(f"⚠️ {user.mention} warned. Reason: {reason}", ephemeral=True)
 
 @bot.tree.command(name="warnings", description="📋 View warnings")
@@ -1655,7 +1759,7 @@ async def on_member_join(member):
     join_timestamps[guild.id].append(now)
     join_timestamps[guild.id] = [t for t in join_timestamps[guild.id] if t > now - timedelta(minutes=1)]
     if len(join_timestamps[guild.id]) > CONFIG["max_joins_per_minute"]:
-        await log_action(guild, "🚨 RAID DETECTED", member, f"Mass joins: {len(join_timestamps[guild.id])} in 1 minute")
+        await log_action(guild, "🚨 RAID DETECTED", member, f"{len(join_timestamps[guild.id])} joins in 1 minute")
         await punish_user(member, guild, "Mass join raid")
 
 @bot.event
@@ -1672,7 +1776,7 @@ async def on_message(message):
     message_cache[key].append((now, message.content))
     message_cache[key] = [(t, c) for t, c in message_cache[key] if t > now - timedelta(seconds=5)]
     if len(message_cache[key]) > CONFIG["max_messages_per_second"] * 5:
-        await log_action(guild, "🚨 SPAM DETECTED", message.author, f"{len(message_cache[key])} messages in 5 seconds")
+        await log_action(guild, "🚨 SPAM DETECTED", message.author, f"{len(message_cache[key])} messages in 5s")
         await punish_user(message.author, guild, "Message spam")
         await message.delete()
         return
@@ -1717,15 +1821,13 @@ async def on_guild_remove(guild):
         pass
 
 # ============================================================
-# MAIN — RUN BOTH WEB SERVER AND DISCORD BOT
+# MAIN
 # ============================================================
 if __name__ == "__main__":
-    # Start web server in background thread
     web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
     print("✅ Web server started on port " + os.environ.get("PORT", "5000"))
-
-    # Run Discord bot
+    
     try:
         bot.run(DISCORD_TOKEN)
     except KeyboardInterrupt:
